@@ -233,6 +233,68 @@
       line-height: 1.55;
     }
 
+    .trace-tools {
+      display: grid;
+      gap: 8px;
+    }
+
+    .trace-buttons {
+      display: grid;
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+      gap: 6px;
+    }
+
+    .trace-buttons button {
+      height: 32px;
+      font-size: 12px;
+    }
+
+    .trace-picker {
+      display: grid;
+      grid-template-columns: repeat(8, minmax(0, 1fr));
+      gap: 4px;
+      max-height: 132px;
+      overflow: auto;
+      padding: 7px;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: #171d18;
+    }
+
+    .trace-picker label {
+      display: block;
+      position: relative;
+      min-width: 0;
+      height: 23px;
+      cursor: pointer;
+    }
+
+    .trace-picker input {
+      position: absolute;
+      opacity: 0;
+      pointer-events: none;
+    }
+
+    .trace-picker span {
+      display: grid;
+      place-items: center;
+      width: 100%;
+      height: 100%;
+      border: 1px solid rgba(241, 244, 234, 0.14);
+      border-radius: 5px;
+      background: #222822;
+      color: var(--muted);
+      font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+      font-size: 10px;
+      font-weight: 800;
+    }
+
+    .trace-picker input:checked + span {
+      border-color: rgba(121, 213, 255, 0.68);
+      background: #123142;
+      color: #dff6ff;
+    }
+
     .floating-note {
       position: absolute;
       left: 22px;
@@ -242,6 +304,25 @@
       font-size: 13px;
       line-height: 1.45;
       pointer-events: none;
+    }
+
+    .view-title {
+      position: absolute;
+      top: 56px;
+      color: rgba(241, 244, 234, 0.56);
+      font-size: 11px;
+      font-weight: 760;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+      pointer-events: none;
+    }
+
+    .view-title.full {
+      left: 22px;
+    }
+
+    .view-title.trace {
+      right: 22px;
     }
 
     .screen-legend {
@@ -351,6 +432,10 @@
         top: 14px;
         width: auto;
       }
+
+      .view-title {
+        display: none;
+      }
     }
   </style>
 </head>
@@ -362,6 +447,8 @@
       <span>Aura: next-step probability</span>
       <span>White: current state</span>
     </div>
+    <div class="view-title full" id="fullTitle">Full space</div>
+    <div class="view-title trace" id="traceTitle"></div>
     <p class="floating-note">Drag to rotate. The state space is a 4 x 4 x 4 block of transparent cubes, each cube one state.</p>
 
     <section class="kernel-panel hidden" id="kernelPanel" aria-label="transition kernel matrix">
@@ -423,6 +510,18 @@
       <button id="newKernel">New kernel</button>
     </div>
 
+    <section class="trace-tools">
+      <h2>Trace</h2>
+      <div class="trace-buttons">
+        <button id="traceNone" type="button">None</button>
+        <button id="traceAll" type="button">All</button>
+        <button id="traceEven" type="button">Even</button>
+        <button id="traceRandom" type="button">Random</button>
+      </div>
+      <div class="trace-picker" id="tracePicker" aria-label="Trace state picker"></div>
+      <p class="subtle" id="traceSummary">No trace selected.</p>
+    </section>
+
     <label>
       Speed
       <input id="speed" type="range" min="160" max="1400" value="680">
@@ -475,6 +574,13 @@
     const legendText = document.getElementById("legendText");
     const floatingNote = document.querySelector(".floating-note");
     const solidLegend = document.getElementById("solidLegend");
+    const tracePicker = document.getElementById("tracePicker");
+    const traceSummary = document.getElementById("traceSummary");
+    const traceNone = document.getElementById("traceNone");
+    const traceAll = document.getElementById("traceAll");
+    const traceEven = document.getElementById("traceEven");
+    const traceRandom = document.getElementById("traceRandom");
+    const traceTitle = document.getElementById("traceTitle");
 
     const GRID_SIZE = 4;
     const CUBE_SIZE = 1;
@@ -518,6 +624,8 @@
     let hittingProbabilities = computeFutureVisitProbabilities();
     let expectedHittingTimes = computeExpectedHittingTimes();
     let solidValues = computeSolidValues();
+    let traceStateIds = [];
+    let traceLayout = new Map();
 
     function centerStateId() {
       return states.reduce((best, state) => {
@@ -919,14 +1027,56 @@
       return { x: x1, y: y1, z: z2 };
     }
 
-    function project(point) {
+    function buildTracePicker() {
+      tracePicker.innerHTML = states.map((state) => `
+        <label>
+          <input type="checkbox" value="${state.id}">
+          <span>${state.id}</span>
+        </label>
+      `).join("");
+    }
+
+    function setTraceStateIds(ids) {
+      traceStateIds = [...new Set(ids)].filter((id) => id >= 0 && id < states.length).sort((a, b) => a - b);
+      const selected = new Set(traceStateIds);
+      for (const input of tracePicker.querySelectorAll("input")) input.checked = selected.has(Number(input.value));
+      traceLayout = compactTraceLayout(traceStateIds);
+      updateUi();
+    }
+
+    function compactTraceLayout(ids) {
+      const layout = new Map();
+      const count = ids.length;
+      if (count === 0) return layout;
+      const xCount = Math.ceil(Math.cbrt(count));
+      const yCount = Math.ceil(Math.sqrt(count / xCount));
+      const zCount = Math.ceil(count / (xCount * yCount));
+
+      ids.forEach((id, index) => {
+        const xIndex = index % xCount;
+        const yIndex = Math.floor(index / xCount) % yCount;
+        const zIndex = Math.floor(index / (xCount * yCount));
+        layout.set(id, {
+          ...states[id],
+          x: xIndex - (xCount - 1) / 2,
+          y: yIndex - (yCount - 1) / 2,
+          z: zIndex - (zCount - 1) / 2,
+          traceXCount: xCount,
+          traceYCount: yCount,
+          traceZCount: zCount
+        });
+      });
+      return layout;
+    }
+
+    function project(point, view) {
       const rotated = rotatePoint(point);
-      const size = Math.min(width, height) * 0.44;
+      const size = Math.min(view.width, view.height) * view.scale;
       const depth = 6.2;
       const scale = size / (depth - rotated.z);
       return {
-        x: width / 2 + rotated.x * scale,
-        y: height / 2 + rotated.y * scale,
+        x: view.x + view.width / 2 + rotated.x * scale,
+        y: view.y + view.height / 2 + rotated.y * scale,
         z: rotated.z,
         scale
       };
@@ -955,7 +1105,7 @@
       ];
     }
 
-    function cubeFaces(vertices) {
+    function cubeFaces(vertices, view) {
       const faceIndices = [
         [0, 1, 2, 3],
         [4, 5, 6, 7],
@@ -965,7 +1115,7 @@
         [0, 3, 7, 4]
       ];
       return faceIndices.map((indices) => {
-        const projected = indices.map((index) => project(vertices[index]));
+        const projected = indices.map((index) => project(vertices[index], view));
         return {
           points: projected,
           z: projected.reduce((sum, point) => sum + point.z, 0) / projected.length
@@ -973,28 +1123,42 @@
       }).sort((a, b) => a.z - b.z);
     }
 
-    function drawCubeOutlines() {
-      const min = -GRID_SIZE / 2;
-      const max = GRID_SIZE / 2;
+    function drawCubeOutlines(view, dimensions = { x: GRID_SIZE, y: GRID_SIZE, z: GRID_SIZE }) {
+      const minX = -dimensions.x / 2;
+      const maxX = dimensions.x / 2;
+      const minY = -dimensions.y / 2;
+      const maxY = dimensions.y / 2;
+      const minZ = -dimensions.z / 2;
+      const maxZ = dimensions.z / 2;
       const lines = [];
 
-      for (let i = 0; i <= GRID_SIZE; i += 1) {
-        const value = min + i;
-        for (const other of [min, max]) {
-          lines.push([{ x: min, y: value, z: other }, { x: max, y: value, z: other }]);
-          lines.push([{ x: value, y: min, z: other }, { x: value, y: max, z: other }]);
-          lines.push([{ x: min, y: other, z: value }, { x: max, y: other, z: value }]);
-          lines.push([{ x: value, y: other, z: min }, { x: value, y: other, z: max }]);
-          lines.push([{ x: other, y: min, z: value }, { x: other, y: max, z: value }]);
-          lines.push([{ x: other, y: value, z: min }, { x: other, y: value, z: max }]);
-        }
+      for (let i = 0; i <= dimensions.x; i += 1) {
+        const x = minX + i;
+        lines.push([{ x, y: minY, z: minZ }, { x, y: maxY, z: minZ }]);
+        lines.push([{ x, y: minY, z: maxZ }, { x, y: maxY, z: maxZ }]);
+        lines.push([{ x, y: minY, z: minZ }, { x, y: minY, z: maxZ }]);
+        lines.push([{ x, y: maxY, z: minZ }, { x, y: maxY, z: maxZ }]);
+      }
+      for (let i = 0; i <= dimensions.y; i += 1) {
+        const y = minY + i;
+        lines.push([{ x: minX, y, z: minZ }, { x: maxX, y, z: minZ }]);
+        lines.push([{ x: minX, y, z: maxZ }, { x: maxX, y, z: maxZ }]);
+        lines.push([{ x: minX, y, z: minZ }, { x: minX, y, z: maxZ }]);
+        lines.push([{ x: maxX, y, z: minZ }, { x: maxX, y, z: maxZ }]);
+      }
+      for (let i = 0; i <= dimensions.z; i += 1) {
+        const z = minZ + i;
+        lines.push([{ x: minX, y: minY, z }, { x: maxX, y: minY, z }]);
+        lines.push([{ x: minX, y: maxY, z }, { x: maxX, y: maxY, z }]);
+        lines.push([{ x: minX, y: minY, z }, { x: minX, y: maxY, z }]);
+        lines.push([{ x: maxX, y: minY, z }, { x: maxX, y: maxY, z }]);
       }
 
       ctx.lineWidth = 1;
       ctx.strokeStyle = "rgba(241, 244, 234, 0.24)";
       for (const [start, end] of lines) {
-        const ps = project(start);
-        const pe = project(end);
+        const ps = project(start, view);
+        const pe = project(end, view);
         ctx.beginPath();
         ctx.moveTo(ps.x, ps.y);
         ctx.lineTo(pe.x, pe.y);
@@ -1002,15 +1166,16 @@
       }
     }
 
-    function drawPath(projected) {
-      if (path.length < 2) return;
+    function drawPath(projected, visiblePath = path) {
+      if (visiblePath.length < 2) return;
       ctx.lineWidth = 3;
       ctx.lineCap = "round";
       ctx.lineJoin = "round";
-      for (let i = 1; i < path.length; i += 1) {
-        const previous = projected.get(path[i - 1]);
-        const next = projected.get(path[i]);
-        const alpha = 0.18 + 0.7 * (i / path.length);
+      for (let i = 1; i < visiblePath.length; i += 1) {
+        const previous = projected.get(visiblePath[i - 1]);
+        const next = projected.get(visiblePath[i]);
+        if (!previous || !next) continue;
+        const alpha = 0.18 + 0.7 * (i / visiblePath.length);
         ctx.strokeStyle = `rgba(121, 213, 255, ${alpha})`;
         ctx.beginPath();
         ctx.moveTo(previous.x, previous.y);
@@ -1019,11 +1184,11 @@
       }
     }
 
-    function drawState(state, projected) {
+    function drawState(state, projected, options = {}) {
       const p = projected.get(state.id);
       const nextProbability = probabilities[state.id];
       const solidValue = solidValues[state.id];
-      const isCurrent = state.id === current;
+      const isCurrent = options.allowActive !== false && state.id === current;
       const hasVisited = visited.has(state.id);
       const isExpectedTimeMode = chainTypeInput.value === "irreducible";
       const showVisitedOutline = hasVisited && !isExpectedTimeMode;
@@ -1076,14 +1241,14 @@
       ctx.strokeStyle = auraColor;
       ctx.lineWidth = isCurrent ? 2.7 : 1.6;
       ctx.globalAlpha = 0.08 + nextNormalized * 0.26;
-      for (const face of cubeFaces(cubeVertices(state, auraInflate))) drawPolygon(face.points);
+      for (const face of cubeFaces(cubeVertices(state, auraInflate), options.view)) drawPolygon(face.points);
       ctx.globalAlpha = 1;
 
       ctx.fillStyle = isCurrent ? "#ffffff" : color;
       ctx.strokeStyle = isCurrent ? "#ffd36a" : showVisitedOutline ? "#fff0bd" : "rgba(255,255,255,0.35)";
       ctx.lineWidth = isCurrent ? 3 : 1.4;
       ctx.globalAlpha = 0.22 + sizeNormalized * 0.3;
-      for (const face of cubeFaces(cubeVertices(state))) drawPolygon(face.points);
+      for (const face of cubeFaces(cubeVertices(state), options.view)) drawPolygon(face.points);
       ctx.globalAlpha = 1;
 
       ctx.fillStyle = "#11130f";
@@ -1093,12 +1258,35 @@
       ctx.fillText(state.id, p.x, p.y + 0.5);
     }
 
-    function drawLabels(projected) {
+    function drawLabels(projected, allowActive = true) {
+      if (!allowActive) return;
       const currentPoint = projected.get(current);
+      if (!currentPoint) return;
       ctx.fillStyle = "rgba(255, 255, 255, 0.86)";
       ctx.font = "700 12px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace";
       ctx.textAlign = "left";
       ctx.fillText(`state ${current}`, currentPoint.x + 18, currentPoint.y - 17);
+    }
+
+    function traceDimensions() {
+      if (traceLayout.size === 0) return { x: GRID_SIZE, y: GRID_SIZE, z: GRID_SIZE };
+      const first = traceLayout.values().next().value;
+      return { x: first.traceXCount, y: first.traceYCount, z: first.traceZCount };
+    }
+
+    function visibleTracePath() {
+      const traceSet = new Set(traceStateIds);
+      return path.filter((id) => traceSet.has(id));
+    }
+
+    function drawStateSet(statesToDraw, view, options = {}) {
+      if (representation === "plain-points") drawCubeOutlines(view, options.dimensions);
+      const projected = new Map(statesToDraw.map((state) => [state.id, project(state, view)]));
+      [...statesToDraw]
+        .sort((a, b) => projected.get(a.id).z - projected.get(b.id).z)
+        .forEach((state) => drawState(state, projected, { ...options, view }));
+      drawPath(projected, options.path || path);
+      drawLabels(projected, options.allowActive !== false);
     }
 
     function updateKernelGrid() {
@@ -1127,6 +1315,10 @@
       currentState.textContent = String(current);
       history.textContent = path.map((id, index) => `${String(steps - path.length + index + 1).padStart(3, " ")}  state ${String(id).padStart(2, " ")}`).join("\n");
       history.scrollTop = history.scrollHeight;
+      traceSummary.textContent = traceStateIds.length === 0
+        ? "No trace selected."
+        : `Trace contains ${traceStateIds.length} states. Active ${traceStateIds.includes(current) ? "inside" : "outside"} trace.`;
+      traceTitle.textContent = traceStateIds.length === 0 ? "" : `Trace (${traceStateIds.length})`;
       representationSelect.value = representation;
       if (representation === "cubes") {
         floatingNote.textContent = "Drag to rotate. The state space is a 4 x 4 x 4 block of transparent cubes, each cube one state.";
@@ -1153,13 +1345,30 @@
       if (autoSpin && !dragging) rotationY += 0.0024;
 
       ctx.clearRect(0, 0, width, height);
-      if (representation === "plain-points") drawCubeOutlines();
-      const projected = new Map(states.map((state) => [state.id, project(state)]));
-      [...states]
-        .sort((a, b) => projected.get(a.id).z - projected.get(b.id).z)
-        .forEach((state) => drawState(state, projected));
-      drawPath(projected);
-      drawLabels(projected);
+      const hasTrace = traceStateIds.length > 0;
+      const gap = hasTrace ? 18 : 0;
+      const fullView = hasTrace
+        ? { x: 0, y: 0, width: width / 2 - gap / 2, height, scale: 0.4 }
+        : { x: 0, y: 0, width, height, scale: 0.44 };
+      drawStateSet(states, fullView, { dimensions: { x: GRID_SIZE, y: GRID_SIZE, z: GRID_SIZE }, allowActive: true, path });
+
+      if (hasTrace) {
+        ctx.save();
+        ctx.strokeStyle = "rgba(241, 244, 234, 0.12)";
+        ctx.beginPath();
+        ctx.moveTo(width / 2, 0);
+        ctx.lineTo(width / 2, height);
+        ctx.stroke();
+        ctx.restore();
+
+        const traceStates = traceStateIds.map((id) => traceLayout.get(id));
+        const traceView = { x: width / 2 + gap / 2, y: 0, width: width / 2 - gap / 2, height, scale: 0.48 };
+        drawStateSet(traceStates, traceView, {
+          dimensions: traceDimensions(),
+          allowActive: traceStateIds.includes(current),
+          path: visibleTracePath()
+        });
+      }
       requestAnimationFrame(render);
     }
 
@@ -1194,6 +1403,22 @@
       updateUi();
     });
 
+    tracePicker.addEventListener("change", () => {
+      const ids = [...tracePicker.querySelectorAll("input:checked")].map((input) => Number(input.value));
+      setTraceStateIds(ids);
+    });
+
+    traceNone.addEventListener("click", () => setTraceStateIds([]));
+
+    traceAll.addEventListener("click", () => setTraceStateIds(states.map((state) => state.id)));
+
+    traceEven.addEventListener("click", () => setTraceStateIds(states.filter((state) => state.id % 2 === 0).map((state) => state.id)));
+
+    traceRandom.addEventListener("click", () => {
+      const count = randomInt(10, 24);
+      setTraceStateIds(shuffle(states.map((state) => state.id)).slice(0, count));
+    });
+
     newKernelButton.addEventListener("click", drawNewKernel);
 
     chainTypeInput.addEventListener("change", drawNewKernel);
@@ -1220,6 +1445,7 @@
     });
 
     window.addEventListener("resize", resize);
+    buildTracePicker();
     resize();
     updateUi();
     requestAnimationFrame(render);

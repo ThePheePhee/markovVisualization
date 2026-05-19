@@ -106,12 +106,13 @@
 
     .controls {
       display: grid;
-      grid-template-columns: repeat(5, minmax(0, 1fr));
+      grid-template-columns: repeat(6, minmax(0, 1fr));
       gap: 8px;
     }
 
     button,
-    select {
+    select,
+    input[type="number"] {
       height: 40px;
       border: 1px solid var(--line);
       border-radius: 7px;
@@ -127,7 +128,8 @@
     }
 
     button:hover,
-    select:hover {
+    select:hover,
+    input[type="number"]:hover {
       border-color: #6d7a67;
       background: #2a332d;
     }
@@ -233,6 +235,10 @@
       font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
       font-size: 12px;
       line-height: 1.55;
+    }
+
+    .path-section.hidden {
+      display: none;
     }
 
     .trace-tools {
@@ -391,13 +397,15 @@
       position: absolute;
       right: 18px;
       bottom: 18px;
-      width: min(760px, calc(100% - 36px));
+      width: min(980px, calc(100% - 36px));
+      max-height: calc(100vh - 36px);
       padding: 14px;
       border: 1px solid rgba(121, 213, 255, 0.24);
       border-radius: 8px;
       background: rgba(18, 24, 22, 0.9);
       box-shadow: 0 18px 50px rgba(0, 0, 0, 0.34);
       backdrop-filter: blur(10px);
+      overflow: auto;
     }
 
     .kernel-panel.hidden {
@@ -412,11 +420,36 @@
       margin-bottom: 10px;
     }
 
+    .kernel-sections {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 14px;
+    }
+
+    .kernel-section {
+      display: grid;
+      gap: 8px;
+      min-width: 0;
+    }
+
+    .kernel-section.hidden {
+      display: none;
+    }
+
+    .kernel-section h3 {
+      margin: 0;
+      color: rgba(241, 244, 234, 0.74);
+      font-size: 11px;
+      font-weight: 800;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+    }
+
     .kernel-grid {
       display: grid;
       gap: 1px;
       aspect-ratio: 1;
-      min-height: 360px;
+      min-height: 320px;
     }
 
     .kernel-cell {
@@ -481,6 +514,10 @@
       .view-counter {
         top: 92px;
       }
+
+      .kernel-sections {
+        grid-template-columns: 1fr;
+      }
     }
   </style>
 </head>
@@ -504,14 +541,23 @@
         <h2>Transition Kernel</h2>
         <p class="subtle" id="kernelCaption">active row highlighted</p>
       </div>
-      <div class="kernel-grid" id="kernelGrid"></div>
+      <div class="kernel-sections">
+        <section class="kernel-section">
+          <h3>Full kernel</h3>
+          <div class="kernel-grid" id="fullKernelGrid"></div>
+        </section>
+        <section class="kernel-section hidden" id="traceKernelSection">
+          <h3>Trace kernel</h3>
+          <div class="kernel-grid" id="traceKernelGrid"></div>
+        </section>
+      </div>
     </section>
   </main>
 
   <aside>
     <div>
       <h1>Transition Kernel Walk</h1>
-      <p class="subtle">A 64-state voxel cube with a base transition kernel, then a visit-sensitive row update at each step.</p>
+      <p class="subtle">A voxel state space with a base transition kernel, then a visit-sensitive row update at each step.</p>
     </div>
 
     <div class="controls" aria-label="simulation controls">
@@ -520,6 +566,7 @@
       <button id="reset" title="Reset walk">&#8634;</button>
       <button class="primary" id="spin" title="Toggle slow rotation">&#10227;</button>
       <button id="kernelToggle" title="Show transition kernel">K</button>
+      <button class="primary" id="pathToggle" title="Toggle path history">P</button>
     </div>
 
     <label>
@@ -530,6 +577,14 @@
         <option value="plain-points">Plain points</option>
       </select>
     </label>
+
+    <div class="option-grid">
+      <label>
+        Full states
+        <input id="stateCount" type="number" min="8" max="125" step="1" value="64">
+      </label>
+      <button id="applyStateCount">Apply</button>
+    </div>
 
     <div class="metric-grid">
       <div class="metric">
@@ -557,6 +612,11 @@
       </label>
       <button id="newKernel">New kernel</button>
     </div>
+
+    <label>
+      Between-state movement <span id="movementValue">70%</span>
+      <input id="movement" type="range" min="0" max="100" value="70">
+    </label>
 
     <section class="trace-tools">
       <h2>Trace</h2>
@@ -605,10 +665,10 @@
       </div>
       <div class="probability-bar" aria-hidden="true"></div>
       <div class="scale-labels" aria-hidden="true"><span>min</span><span>mid</span><span>max</span></div>
-      <p class="subtle" id="legendText">Solid color gives relative expected hitting time: green is shorter, red is longer. The transparent aura gives relative next-step probability. The matrix shows numeric probabilities for the visit-adjusted kernel, with the active row highlighted.</p>
+      <p class="subtle" id="legendText">Solid color gives relative expected hitting time: green is shorter, red is longer. The transparent aura gives relative next-step probability. The matrix shows numeric probabilities for the base kernel, with the active row highlighted.</p>
     </section>
 
-    <section>
+    <section class="path-section" id="pathSection">
       <h2>Path</h2>
       <div class="history" id="history"></div>
     </section>
@@ -622,16 +682,24 @@
     const resetButton = document.getElementById("reset");
     const spinButton = document.getElementById("spin");
     const kernelToggle = document.getElementById("kernelToggle");
+    const pathToggle = document.getElementById("pathToggle");
     const representationSelect = document.getElementById("representationSelect");
+    const stateCountInput = document.getElementById("stateCount");
+    const applyStateCountButton = document.getElementById("applyStateCount");
     const newKernelButton = document.getElementById("newKernel");
     const speedInput = document.getElementById("speed");
+    const movementInput = document.getElementById("movement");
+    const movementValue = document.getElementById("movementValue");
     const chainTypeInput = document.getElementById("chainType");
     const stepCount = document.getElementById("stepCount");
     const visitedCount = document.getElementById("visitedCount");
     const currentState = document.getElementById("currentState");
     const history = document.getElementById("history");
+    const pathSection = document.getElementById("pathSection");
     const kernelPanel = document.getElementById("kernelPanel");
-    const kernelGrid = document.getElementById("kernelGrid");
+    const fullKernelGrid = document.getElementById("fullKernelGrid");
+    const traceKernelSection = document.getElementById("traceKernelSection");
+    const traceKernelGrid = document.getElementById("traceKernelGrid");
     const kernelCaption = document.getElementById("kernelCaption");
     const legendText = document.getElementById("legendText");
     const floatingNote = document.querySelector(".floating-note");
@@ -649,25 +717,13 @@
     const fullStepCounter = document.getElementById("fullStepCounter");
     const traceStepCounter = document.getElementById("traceStepCounter");
 
-    const GRID_SIZE = 4;
+    const DEFAULT_STATE_COUNT = 64;
+    const MIN_STATE_COUNT = 8;
+    const MAX_STATE_COUNT = 125;
     const CUBE_SIZE = 1;
     const VISIT_MEMORY = 0.64;
-    const states = [];
-    for (let zIndex = 0; zIndex < GRID_SIZE; zIndex += 1) {
-      for (let yIndex = 0; yIndex < GRID_SIZE; yIndex += 1) {
-        for (let xIndex = 0; xIndex < GRID_SIZE; xIndex += 1) {
-          states.push({
-            id: states.length,
-            x: xIndex - (GRID_SIZE - 1) / 2,
-            y: yIndex - (GRID_SIZE - 1) / 2,
-            z: zIndex - (GRID_SIZE - 1) / 2,
-            xIndex,
-            yIndex,
-            zIndex
-          });
-        }
-      }
-    }
+    let fullDimensions = { x: 4, y: 4, z: 4 };
+    let states = buildStateSpace(DEFAULT_STATE_COUNT);
 
     let width = 0;
     let height = 0;
@@ -679,6 +735,7 @@
     let running = false;
     let autoSpin = true;
     let showKernel = false;
+    let showPathHistory = true;
     let representation = "cubes";
     let lastStepAt = 0;
     let kernelMeta = { summary: "uniform start, stochastic perturbation" };
@@ -700,6 +757,32 @@
     let traceSolidValues = [...solidValues];
     let traceExpectedHittingTimes = [...expectedHittingTimes];
     let traceReferenceState = current;
+
+    function buildStateSpace(count) {
+      fullDimensions = compactTraceDimensions(count);
+      const nextStates = [];
+      for (let zIndex = 0; zIndex < fullDimensions.z; zIndex += 1) {
+        for (let yIndex = 0; yIndex < fullDimensions.y; yIndex += 1) {
+          for (let xIndex = 0; xIndex < fullDimensions.x; xIndex += 1) {
+            if (nextStates.length >= count) break;
+            nextStates.push({
+              id: nextStates.length,
+              x: xIndex - (fullDimensions.x - 1) / 2,
+              y: yIndex - (fullDimensions.y - 1) / 2,
+              z: zIndex - (fullDimensions.z - 1) / 2,
+              xIndex,
+              yIndex,
+              zIndex
+            });
+          }
+        }
+      }
+      return nextStates;
+    }
+
+    function clampStateCount(value) {
+      return Math.max(MIN_STATE_COUNT, Math.min(MAX_STATE_COUNT, Math.round(Number(value) || DEFAULT_STATE_COUNT)));
+    }
 
     function centerStateId() {
       return states.reduce((best, state) => {
@@ -744,6 +827,10 @@
       return copy;
     }
 
+    function kernelMovement() {
+      return Math.max(0, Math.min(1, Number(movementInput.value) / 100));
+    }
+
     function createUniformKernel() {
       const probability = 1 / states.length;
       return states.map(() => states.map(() => probability));
@@ -751,16 +838,26 @@
 
     function perturbedRowFromUniform(uniformRow, fromId, allowedTargets, strength) {
       const allowed = new Set(allowedTargets);
-      const hotTargets = shuffle(allowedTargets).slice(0, Math.max(1, Math.min(4, randomInt(1, allowedTargets.length))));
-      const weights = uniformRow.map((value, toId) => {
+      const movement = kernelMovement();
+      const locality = 1 - movement;
+      const hotCount = Math.max(1, Math.min(allowedTargets.length, Math.round(2 + locality * 5)));
+      const hotTargets = shuffle(allowedTargets).slice(0, hotCount);
+      const uniformAllowedProbability = 1 / allowedTargets.length;
+      const structuredWeights = uniformRow.map((value, toId) => {
         if (!allowed.has(toId)) return 0;
-        const localBump = 1 + 1.8 * Math.exp(-1.15 * distance(states[fromId], states[toId]));
-        const hotBump = hotTargets.includes(toId) ? 1 + Math.random() * 5.2 : 1;
-        const selfBump = fromId === toId ? 1 + Math.random() * 2.4 : 1;
-        const noise = Math.exp((Math.random() * 2 - 1) * strength);
+        const localBump = 1 + locality * 1.65 * Math.exp(-1.15 * distance(states[fromId], states[toId]));
+        const hotBump = hotTargets.includes(toId) ? 1 + locality * Math.random() * 3.6 : 1;
+        const selfBump = fromId === toId ? Math.max(0.18, 1 + locality * Math.random() * 1.6 - movement * 0.95) : 1;
+        const noise = Math.exp((Math.random() * 2 - 1) * strength * (0.35 + locality * 0.65));
         return value * localBump * hotBump * selfBump * noise;
       });
-      return normalize(weights);
+      const structuredRow = normalize(structuredWeights);
+      const broadMix = 0.1 + movement * 0.82;
+      const mixed = structuredRow.map((value, toId) => {
+        if (!allowed.has(toId)) return 0;
+        return value * (1 - broadMix) + uniformAllowedProbability * broadMix;
+      });
+      return normalize(mixed);
     }
 
     function graphFromMatrix(matrix) {
@@ -796,10 +893,13 @@
     }
 
     function kernelIsInteresting(matrix) {
+      const movement = kernelMovement();
       const averageMax = averageMaxProbability(matrix);
       const uniform = 1 / states.length;
-      const rowPeaks = matrix.filter((row) => Math.max(...row) > uniform * 5).length;
-      return averageMax > uniform * 3.8 && rowPeaks >= Math.floor(states.length * 0.45);
+      const requiredPeak = uniform * (1.35 + (1 - movement) * 2.45);
+      const requiredRowShare = 0.18 + (1 - movement) * 0.27;
+      const rowPeaks = matrix.filter((row) => Math.max(...row) > requiredPeak).length;
+      return averageMax > uniform * (1.18 + (1 - movement) * 2.45) && rowPeaks >= Math.floor(states.length * requiredRowShare);
     }
 
     function buildClosedSets(type) {
@@ -1071,6 +1171,25 @@
       reset({ forceTraceSnapshot: true });
     }
 
+    function updateMovementLabel() {
+      movementValue.textContent = `${movementInput.value}%`;
+    }
+
+    function applyStateCount() {
+      const nextCount = clampStateCount(stateCountInput.value);
+      stateCountInput.value = String(nextCount);
+      if (nextCount === states.length) return;
+
+      running = false;
+      toggleButton.textContent = "\u25b6";
+      states = buildStateSpace(nextCount);
+      traceStateIds = [];
+      traceLayout = new Map();
+      buildTracePicker();
+      baseKernel = createKernel(chainTypeInput.value);
+      reset({ forceTraceSnapshot: true });
+    }
+
     function probabilityColor(value, values, invert = false) {
       const minValue = Math.min(...values);
       const maxValue = Math.max(...values);
@@ -1084,6 +1203,17 @@
       const right = t < 0.5 ? mid : high;
       const localT = t < 0.5 ? t / 0.5 : (t - 0.5) / 0.5;
       const rgb = left.map((channel, index) => Math.round(channel + (right[index] - channel) * localT));
+      return `rgb(${rgb[0]}, ${rgb[1]}, ${rgb[2]})`;
+    }
+
+    function kernelProbabilityColor(value, values) {
+      const minValue = Math.min(...values);
+      const maxValue = Math.max(...values);
+      const span = maxValue - minValue;
+      const t = span === 0 ? 1 : Math.max(0, Math.min(1, (value - minValue) / span));
+      const red = [217, 58, 53];
+      const green = [52, 208, 109];
+      const rgb = red.map((channel, index) => Math.round(channel + (green[index] - channel) * t));
       return `rgb(${rgb[0]}, ${rgb[1]}, ${rgb[2]})`;
     }
 
@@ -1129,6 +1259,7 @@
       traceLayout = compactTraceLayout(traceStateIds);
       traceActivations = 0;
       refreshTraceDistributions(true);
+      updateKernelGrid();
       updateUi();
     }
 
@@ -1167,7 +1298,7 @@
           const volume = dimensions[0] * dimensions[1] * dimensions[2];
           const spread = dimensions[0] - dimensions[2];
           const surface = dimensions[0] * dimensions[1] + dimensions[0] * dimensions[2] + dimensions[1] * dimensions[2];
-          const score = volume - count + spread * 0.2 + surface * 0.001;
+          const score = spread * 10 + (volume - count) * 0.1 + surface * 0.001;
           if (!best || score < best.score) best = { dimensions, score };
         }
       }
@@ -1229,7 +1360,7 @@
       }).sort((a, b) => a.z - b.z);
     }
 
-    function drawCubeOutlines(view, dimensions = { x: GRID_SIZE, y: GRID_SIZE, z: GRID_SIZE }) {
+    function drawCubeOutlines(view, dimensions = fullDimensions) {
       const minX = -dimensions.x / 2;
       const maxX = dimensions.x / 2;
       const minY = -dimensions.y / 2;
@@ -1273,6 +1404,7 @@
     }
 
     function drawPath(projected, visiblePath = path) {
+      if (!showPathHistory) return;
       if (visiblePath.length < 2) return;
       ctx.lineWidth = 3;
       ctx.lineCap = "round";
@@ -1372,8 +1504,8 @@
     }
 
     function traceDimensions() {
-      if (traceArrangementMode === "full-space") return { x: GRID_SIZE, y: GRID_SIZE, z: GRID_SIZE };
-      if (traceLayout.size === 0) return { x: GRID_SIZE, y: GRID_SIZE, z: GRID_SIZE };
+      if (traceArrangementMode === "full-space") return fullDimensions;
+      if (traceLayout.size === 0) return fullDimensions;
       const first = traceLayout.values().next().value;
       return { x: first.traceXCount, y: first.traceYCount, z: first.traceZCount };
     }
@@ -1393,24 +1525,52 @@
       drawPath(projected, options.path || path);
     }
 
+    function traceKernelRows() {
+      return traceStateIds.map((fromId) => {
+        const rowValues = traceStateIds.map((toId) => baseKernel[fromId][toId]);
+        const total = rowValues.reduce((sum, value) => sum + value, 0);
+        if (total <= 1e-14) return rowValues.map(() => 0);
+        return rowValues.map((value) => value / total);
+      });
+    }
+
+    function renderKernelMatrix(grid, rows, rowIds, columnIds, activeRowId) {
+      const values = rows.flat();
+      grid.style.gridTemplateColumns = `repeat(${columnIds.length}, 1fr)`;
+      grid.style.minHeight = columnIds.length <= 12 ? "220px" : "320px";
+      grid.innerHTML = rows.map((row, rowIndex) => row.map((value, columnIndex) => {
+        const fromId = rowIds[rowIndex];
+        const toId = columnIds[columnIndex];
+        const classes = [
+          "kernel-cell",
+          fromId === activeRowId ? "active-row" : ""
+        ].filter(Boolean).join(" ");
+        return `<span class="${classes}" title="P(${toId} | ${fromId}) = ${value.toFixed(4)}" style="background:${kernelProbabilityColor(value, values)}">${value.toFixed(2)}</span>`;
+      }).join("")).join("");
+    }
+
     function updateKernelGrid() {
       if (!showKernel) return;
-      const rows = baseKernel.map((row, rowIndex) => rowIndex === current ? probabilities : effectiveRow(rowIndex, visited));
-      const allValues = rows.flat();
-      const cells = [];
-      kernelGrid.style.gridTemplateColumns = `repeat(${states.length}, 1fr)`;
-      for (let rowIndex = 0; rowIndex < rows.length; rowIndex += 1) {
-        for (let columnIndex = 0; columnIndex < rows[rowIndex].length; columnIndex += 1) {
-          const value = rows[rowIndex][columnIndex];
-          const classes = [
-            "kernel-cell",
-            rowIndex === current ? "active-row" : ""
-          ].filter(Boolean).join(" ");
-          cells.push(`<span class="${classes}" title="P(${columnIndex} | ${rowIndex}) = ${value.toFixed(3)}" style="background:${probabilityColor(value, allValues)}">${value.toFixed(2)}</span>`);
-        }
+      const stateIds = states.map((state) => state.id);
+      renderKernelMatrix(fullKernelGrid, baseKernel, stateIds, stateIds, current);
+
+      const hasTrace = traceStateIds.length > 0;
+      traceKernelSection.classList.toggle("hidden", !hasTrace);
+      if (hasTrace) {
+        renderKernelMatrix(
+          traceKernelGrid,
+          traceKernelRows(),
+          traceStateIds,
+          traceStateIds,
+          traceStateIds.includes(current) ? current : -1
+        );
+      } else {
+        traceKernelGrid.innerHTML = "";
       }
-      kernelGrid.innerHTML = cells.join("");
-      kernelCaption.textContent = `row ${current} highlighted, ${kernelMeta.summary}`;
+
+      kernelCaption.textContent = hasTrace
+        ? `full row ${current} highlighted; trace row highlighted when active state is in trace`
+        : `row ${current} highlighted, ${kernelMeta.summary}`;
     }
 
     function updateUi() {
@@ -1423,6 +1583,8 @@
       traceStepCounter.textContent = `trace activations ${traceActivations}`;
       traceStepCounter.style.left = "75%";
       traceStepCounter.classList.toggle("hidden", traceStateIds.length === 0);
+      pathSection.classList.toggle("hidden", !showPathHistory);
+      pathToggle.classList.toggle("primary", showPathHistory);
       history.textContent = path.map((id, index) => `${String(steps - path.length + index + 1).padStart(3, " ")}  state ${String(id).padStart(2, " ")}`).join("\n");
       history.scrollTop = history.scrollHeight;
       traceSummary.textContent = traceStateIds.length === 0
@@ -1436,19 +1598,20 @@
       representationSelect.value = representation;
       traceArrangement.value = traceArrangementMode;
       traceColorModeInput.value = traceColorMode;
+      updateMovementLabel();
       if (representation === "cubes") {
-        floatingNote.textContent = "Drag to rotate. The state space is a 4 x 4 x 4 block of transparent cubes, each cube one state.";
+        floatingNote.textContent = `Drag to rotate. The state space is a ${fullDimensions.x} x ${fullDimensions.y} x ${fullDimensions.z} block containing ${states.length} transparent cube states.`;
       } else if (representation === "numbered-points") {
-        floatingNote.textContent = "Drag to rotate. The state space is a 4 x 4 x 4 lattice of numbered point states.";
+        floatingNote.textContent = `Drag to rotate. The state space is a ${fullDimensions.x} x ${fullDimensions.y} x ${fullDimensions.z} lattice containing ${states.length} numbered point states.`;
       } else {
-        floatingNote.textContent = "Drag to rotate. The state space is a 4 x 4 x 4 lattice of colored points, with cube outlines for orientation.";
+        floatingNote.textContent = `Drag to rotate. The state space is a ${fullDimensions.x} x ${fullDimensions.y} x ${fullDimensions.z} lattice containing ${states.length} colored points, with cube outlines for orientation.`;
       }
       if (chainTypeInput.value === "irreducible") {
         solidLegend.textContent = "Solid color: expected hitting time (green = shorter, red = longer)";
-        legendText.textContent = "Solid color gives relative expected hitting time: green is shorter, red is longer. The transparent aura gives relative next-step probability. The matrix shows numeric probabilities for the visit-adjusted kernel, with the active row highlighted.";
+        legendText.textContent = "Solid color gives relative expected hitting time: green is shorter, red is longer. The transparent aura gives relative next-step probability. The matrix shows numeric probabilities for the base kernel, with the active row highlighted.";
       } else {
         solidLegend.textContent = "Solid color: probability the state will ever be visited";
-        legendText.textContent = "Solid color gives relative ever-visit probability from red to green. The transparent aura gives relative next-step probability. The matrix shows numeric probabilities for the visit-adjusted kernel, with the active row highlighted.";
+        legendText.textContent = "Solid color gives relative ever-visit probability from red to green. The transparent aura gives relative next-step probability. The matrix shows numeric probabilities for the base kernel, with the active row highlighted.";
       }
     }
 
@@ -1466,7 +1629,7 @@
       const fullView = hasTrace
         ? { x: 0, y: 0, width: width / 2 - gap / 2, height, scale: 0.4 }
         : { x: 0, y: 0, width, height, scale: 0.44 };
-      drawStateSet(states, fullView, { dimensions: { x: GRID_SIZE, y: GRID_SIZE, z: GRID_SIZE }, allowActive: true, path });
+      drawStateSet(states, fullView, { dimensions: fullDimensions, allowActive: true, path });
 
       if (hasTrace) {
         ctx.save();
@@ -1526,9 +1689,20 @@
       updateKernelGrid();
     });
 
+    pathToggle.addEventListener("click", () => {
+      showPathHistory = !showPathHistory;
+      updateUi();
+    });
+
     representationSelect.addEventListener("change", () => {
       representation = representationSelect.value;
       updateUi();
+    });
+
+    applyStateCountButton.addEventListener("click", applyStateCount);
+
+    stateCountInput.addEventListener("keydown", (event) => {
+      if (event.key === "Enter") applyStateCount();
     });
 
     traceArrangement.addEventListener("change", () => {
@@ -1560,6 +1734,10 @@
     newKernelButton.addEventListener("click", drawNewKernel);
 
     chainTypeInput.addEventListener("change", drawNewKernel);
+
+    movementInput.addEventListener("input", updateMovementLabel);
+
+    movementInput.addEventListener("change", drawNewKernel);
 
     canvas.addEventListener("pointerdown", (event) => {
       dragging = true;

@@ -1,0 +1,1228 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>State Space Transition Kernel</title>
+  <style>
+    :root {
+      color-scheme: dark;
+      --bg: #11130f;
+      --panel: #1c211c;
+      --panel-2: #232a24;
+      --ink: #f1f4ea;
+      --muted: #abb3a5;
+      --line: #414a3f;
+      --accent: #79d5ff;
+      --visited: #f6c65b;
+      --current: #ffffff;
+      --active-edge: #ffd36a;
+      --low: #d93a35;
+      --high: #34d06d;
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    html,
+    body {
+      width: 100%;
+      min-height: 100%;
+      margin: 0;
+      background: var(--bg);
+      color: var(--ink);
+      font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    }
+
+    body {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) 370px;
+      min-height: 100vh;
+      overflow: hidden;
+    }
+
+    main {
+      position: relative;
+      min-width: 0;
+      min-height: 100vh;
+      background:
+        radial-gradient(circle at 28% 24%, rgba(121, 213, 255, 0.12), transparent 28%),
+        linear-gradient(145deg, #11130f 0%, #161b17 52%, #0d1113 100%);
+    }
+
+    canvas {
+      display: block;
+      width: 100%;
+      height: 100%;
+      cursor: grab;
+      touch-action: none;
+    }
+
+    canvas:active {
+      cursor: grabbing;
+    }
+
+    aside {
+      display: flex;
+      flex-direction: column;
+      gap: 16px;
+      min-height: 100vh;
+      padding: 22px;
+      border-left: 1px solid var(--line);
+      background: var(--panel);
+      box-shadow: -16px 0 48px rgba(0, 0, 0, 0.22);
+      overflow: auto;
+    }
+
+    h1,
+    h2,
+    p {
+      margin: 0;
+    }
+
+    h1 {
+      font-size: 20px;
+      line-height: 1.18;
+      font-weight: 720;
+      letter-spacing: 0;
+    }
+
+    h2 {
+      color: var(--muted);
+      font-size: 12px;
+      font-weight: 760;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+    }
+
+    .subtle {
+      color: var(--muted);
+      font-size: 13px;
+      line-height: 1.5;
+    }
+
+    .controls {
+      display: grid;
+      grid-template-columns: repeat(5, minmax(0, 1fr));
+      gap: 8px;
+    }
+
+    button,
+    select {
+      height: 40px;
+      border: 1px solid var(--line);
+      border-radius: 7px;
+      background: var(--panel-2);
+      color: var(--ink);
+      font: inherit;
+      font-size: 14px;
+      font-weight: 700;
+    }
+
+    button {
+      cursor: pointer;
+    }
+
+    button:hover,
+    select:hover {
+      border-color: #6d7a67;
+      background: #2a332d;
+    }
+
+    button.primary {
+      border-color: rgba(121, 213, 255, 0.55);
+      background: #133142;
+      color: #dff6ff;
+    }
+
+    .metric-grid {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 8px;
+    }
+
+    .metric {
+      min-height: 70px;
+      padding: 12px;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: #171d18;
+    }
+
+    .metric strong {
+      display: block;
+      margin-top: 7px;
+      font-size: 22px;
+      line-height: 1;
+    }
+
+    .metric span,
+    label {
+      color: var(--muted);
+      font-size: 11px;
+      font-weight: 760;
+      letter-spacing: 0.07em;
+      text-transform: uppercase;
+    }
+
+    label {
+      display: grid;
+      gap: 8px;
+    }
+
+    input[type="range"] {
+      width: 100%;
+      accent-color: var(--accent);
+    }
+
+    .option-grid {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) 128px;
+      gap: 8px;
+    }
+
+    .legend {
+      display: grid;
+      gap: 10px;
+    }
+
+    .legend-row {
+      display: grid;
+      grid-template-columns: 18px minmax(0, 1fr);
+      align-items: center;
+      gap: 10px;
+      color: var(--muted);
+      font-size: 13px;
+    }
+
+    .swatch {
+      width: 14px;
+      height: 14px;
+      border-radius: 50%;
+      border: 1px solid rgba(255, 255, 255, 0.3);
+    }
+
+    .probability-bar {
+      height: 13px;
+      border: 1px solid var(--line);
+      border-radius: 999px;
+      background: linear-gradient(90deg, var(--low), #f0c94b, var(--high));
+    }
+
+    .scale-labels {
+      display: flex;
+      justify-content: space-between;
+      margin-top: -6px;
+      color: var(--muted);
+      font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+      font-size: 11px;
+    }
+
+    .history {
+      min-height: 102px;
+      max-height: 150px;
+      padding: 12px;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: #171d18;
+      overflow: auto;
+      color: var(--muted);
+      font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+      font-size: 12px;
+      line-height: 1.55;
+    }
+
+    .floating-note {
+      position: absolute;
+      left: 22px;
+      bottom: 18px;
+      max-width: 430px;
+      color: rgba(241, 244, 234, 0.74);
+      font-size: 13px;
+      line-height: 1.45;
+      pointer-events: none;
+    }
+
+    .screen-legend {
+      position: absolute;
+      left: 22px;
+      top: 18px;
+      display: flex;
+      gap: 12px;
+      max-width: calc(100% - 44px);
+      padding: 6px 8px;
+      border: 1px solid rgba(241, 244, 234, 0.08);
+      border-radius: 6px;
+      background: rgba(18, 24, 22, 0.24);
+      color: rgba(241, 244, 234, 0.52);
+      font-size: 10px;
+      line-height: 1.2;
+      pointer-events: none;
+    }
+
+    .screen-legend strong {
+      color: rgba(241, 244, 234, 0.6);
+      font-size: 10px;
+      letter-spacing: 0.07em;
+      text-transform: uppercase;
+    }
+
+    .kernel-panel {
+      position: absolute;
+      right: 18px;
+      bottom: 18px;
+      width: min(760px, calc(100% - 36px));
+      padding: 14px;
+      border: 1px solid rgba(121, 213, 255, 0.24);
+      border-radius: 8px;
+      background: rgba(18, 24, 22, 0.9);
+      box-shadow: 0 18px 50px rgba(0, 0, 0, 0.34);
+      backdrop-filter: blur(10px);
+    }
+
+    .kernel-panel.hidden {
+      display: none;
+    }
+
+    .kernel-head {
+      display: flex;
+      align-items: baseline;
+      justify-content: space-between;
+      gap: 12px;
+      margin-bottom: 10px;
+    }
+
+    .kernel-grid {
+      display: grid;
+      gap: 1px;
+      aspect-ratio: 1;
+      min-height: 360px;
+    }
+
+    .kernel-cell {
+      display: grid;
+      place-items: center;
+      min-width: 0;
+      min-height: 0;
+      border-radius: 2px;
+      outline: 1px solid rgba(255, 255, 255, 0.025);
+      color: rgba(16, 19, 15, 0.9);
+      font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+      font-size: 5.5px;
+      font-weight: 800;
+      line-height: 1;
+      overflow: hidden;
+      text-shadow: 0 1px 1px rgba(255, 255, 255, 0.22);
+    }
+
+    .kernel-cell.active-row {
+      outline: 1px solid rgba(255, 95, 126, 0.95);
+      box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.36);
+    }
+
+    @media (max-width: 980px) {
+      body {
+        grid-template-columns: 1fr;
+        grid-template-rows: minmax(460px, 58vh) auto;
+        overflow: auto;
+      }
+
+      main,
+      aside {
+        min-height: 0;
+      }
+
+      aside {
+        border-top: 1px solid var(--line);
+        border-left: 0;
+      }
+
+      .floating-note {
+        left: 16px;
+        right: 16px;
+        bottom: 14px;
+        max-width: none;
+      }
+
+      .screen-legend {
+        left: 16px;
+        right: 16px;
+        top: 14px;
+        width: auto;
+      }
+    }
+  </style>
+</head>
+<body>
+  <main>
+    <canvas id="scene" aria-label="3D cube state space visualization"></canvas>
+    <div class="screen-legend" id="screenLegend">
+      <span id="solidLegend">Solid color: expected hitting time (green = shorter, red = longer)</span>
+      <span>Aura: next-step probability</span>
+      <span>White: current state</span>
+    </div>
+    <p class="floating-note">Drag to rotate. The state space is a 4 x 4 x 4 block of transparent cubes, each cube one state.</p>
+
+    <section class="kernel-panel hidden" id="kernelPanel" aria-label="transition kernel matrix">
+      <div class="kernel-head">
+        <h2>Transition Kernel</h2>
+        <p class="subtle" id="kernelCaption">active row highlighted</p>
+      </div>
+      <div class="kernel-grid" id="kernelGrid"></div>
+    </section>
+  </main>
+
+  <aside>
+    <div>
+      <h1>Transition Kernel Walk</h1>
+      <p class="subtle">A 64-state voxel cube with a base transition kernel, then a visit-sensitive row update at each step.</p>
+    </div>
+
+    <div class="controls" aria-label="simulation controls">
+      <button class="primary" id="toggle" title="Start or pause">&#9654;</button>
+      <button id="step" title="Advance one transition">&#8631;</button>
+      <button id="reset" title="Reset walk">&#8634;</button>
+      <button class="primary" id="spin" title="Toggle slow rotation">&#10227;</button>
+      <button id="kernelToggle" title="Show transition kernel">K</button>
+    </div>
+
+    <label>
+      Representation
+      <select id="representationSelect">
+        <option value="cubes">Transparent cubes</option>
+        <option value="numbered-points">Numbered points</option>
+        <option value="plain-points">Plain points</option>
+      </select>
+    </label>
+
+    <div class="metric-grid">
+      <div class="metric">
+        <span>Step</span>
+        <strong id="stepCount">0</strong>
+      </div>
+      <div class="metric">
+        <span>Visited</span>
+        <strong id="visitedCount">1</strong>
+      </div>
+      <div class="metric">
+        <span>Current</span>
+        <strong id="currentState">21</strong>
+      </div>
+    </div>
+
+    <div class="option-grid">
+      <label>
+        Chain type
+        <select id="chainType">
+          <option value="irreducible">Irreducible</option>
+          <option value="reducible">Reducible split</option>
+          <option value="reducible-branching">Reducible, branching start</option>
+        </select>
+      </label>
+      <button id="newKernel">New kernel</button>
+    </div>
+
+    <label>
+      Speed
+      <input id="speed" type="range" min="160" max="1400" value="680">
+    </label>
+
+    <section class="legend" aria-label="legend">
+      <h2>Encoding</h2>
+      <div class="legend-row">
+        <span class="swatch" style="background: var(--current); border-color: var(--active-edge);"></span>
+        <span>Current state</span>
+      </div>
+      <div class="legend-row">
+        <span class="swatch" style="background: var(--visited);"></span>
+        <span>Visited state</span>
+      </div>
+      <div class="legend-row">
+        <span class="swatch" style="background: var(--accent);"></span>
+        <span>Transition path</span>
+      </div>
+      <div class="probability-bar" aria-hidden="true"></div>
+      <div class="scale-labels" aria-hidden="true"><span>min</span><span>mid</span><span>max</span></div>
+      <p class="subtle" id="legendText">Solid color gives relative expected hitting time: green is shorter, red is longer. The transparent aura gives relative next-step probability. The matrix shows numeric probabilities for the visit-adjusted kernel, with the active row highlighted.</p>
+    </section>
+
+    <section>
+      <h2>Path</h2>
+      <div class="history" id="history"></div>
+    </section>
+  </aside>
+
+  <script>
+    const canvas = document.getElementById("scene");
+    const ctx = canvas.getContext("2d");
+    const toggleButton = document.getElementById("toggle");
+    const stepButton = document.getElementById("step");
+    const resetButton = document.getElementById("reset");
+    const spinButton = document.getElementById("spin");
+    const kernelToggle = document.getElementById("kernelToggle");
+    const representationSelect = document.getElementById("representationSelect");
+    const newKernelButton = document.getElementById("newKernel");
+    const speedInput = document.getElementById("speed");
+    const chainTypeInput = document.getElementById("chainType");
+    const stepCount = document.getElementById("stepCount");
+    const visitedCount = document.getElementById("visitedCount");
+    const currentState = document.getElementById("currentState");
+    const history = document.getElementById("history");
+    const kernelPanel = document.getElementById("kernelPanel");
+    const kernelGrid = document.getElementById("kernelGrid");
+    const kernelCaption = document.getElementById("kernelCaption");
+    const legendText = document.getElementById("legendText");
+    const floatingNote = document.querySelector(".floating-note");
+    const solidLegend = document.getElementById("solidLegend");
+
+    const GRID_SIZE = 4;
+    const CUBE_SIZE = 1;
+    const VISIT_MEMORY = 0.64;
+    const states = [];
+    for (let zIndex = 0; zIndex < GRID_SIZE; zIndex += 1) {
+      for (let yIndex = 0; yIndex < GRID_SIZE; yIndex += 1) {
+        for (let xIndex = 0; xIndex < GRID_SIZE; xIndex += 1) {
+          states.push({
+            id: states.length,
+            x: xIndex - (GRID_SIZE - 1) / 2,
+            y: yIndex - (GRID_SIZE - 1) / 2,
+            z: zIndex - (GRID_SIZE - 1) / 2,
+            xIndex,
+            yIndex,
+            zIndex
+          });
+        }
+      }
+    }
+
+    let width = 0;
+    let height = 0;
+    let dpr = 1;
+    let rotationX = -0.62;
+    let rotationY = 0.74;
+    let dragging = false;
+    let lastPointer = { x: 0, y: 0 };
+    let running = false;
+    let autoSpin = true;
+    let showKernel = false;
+    let representation = "cubes";
+    let lastStepAt = 0;
+    let kernelMeta = { summary: "uniform start, stochastic perturbation" };
+    let baseKernel = createKernel("irreducible");
+    let current = centerStateId();
+    let steps = 0;
+    let visited = new Set([current]);
+    let path = [current];
+    let probabilities = effectiveRow(current, visited);
+    let hittingProbabilities = computeFutureVisitProbabilities();
+    let expectedHittingTimes = computeExpectedHittingTimes();
+    let solidValues = computeSolidValues();
+
+    function centerStateId() {
+      return states.reduce((best, state) => {
+        const stateDistance = Math.abs(state.x) + Math.abs(state.y) + Math.abs(state.z);
+        const bestDistance = Math.abs(best.x) + Math.abs(best.y) + Math.abs(best.z);
+        return stateDistance < bestDistance ? state : best;
+      }, states[0]).id;
+    }
+
+    function resize() {
+      const rect = canvas.getBoundingClientRect();
+      dpr = Math.max(1, Math.min(2, window.devicePixelRatio || 1));
+      width = Math.floor(rect.width);
+      height = Math.floor(rect.height);
+      canvas.width = Math.floor(width * dpr);
+      canvas.height = Math.floor(height * dpr);
+      ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    }
+
+    function distance(a, b) {
+      const dx = a.x - b.x;
+      const dy = a.y - b.y;
+      const dz = a.z - b.z;
+      return Math.sqrt(dx * dx + dy * dy + dz * dz);
+    }
+
+    function normalize(row) {
+      const total = row.reduce((sum, value) => sum + value, 0);
+      return row.map((value) => value / total);
+    }
+
+    function randomInt(min, max) {
+      return min + Math.floor(Math.random() * (max - min + 1));
+    }
+
+    function shuffle(values) {
+      const copy = [...values];
+      for (let index = copy.length - 1; index > 0; index -= 1) {
+        const swapIndex = Math.floor(Math.random() * (index + 1));
+        [copy[index], copy[swapIndex]] = [copy[swapIndex], copy[index]];
+      }
+      return copy;
+    }
+
+    function createUniformKernel() {
+      const probability = 1 / states.length;
+      return states.map(() => states.map(() => probability));
+    }
+
+    function perturbedRowFromUniform(uniformRow, fromId, allowedTargets, strength) {
+      const allowed = new Set(allowedTargets);
+      const hotTargets = shuffle(allowedTargets).slice(0, Math.max(1, Math.min(4, randomInt(1, allowedTargets.length))));
+      const weights = uniformRow.map((value, toId) => {
+        if (!allowed.has(toId)) return 0;
+        const localBump = 1 + 1.8 * Math.exp(-1.15 * distance(states[fromId], states[toId]));
+        const hotBump = hotTargets.includes(toId) ? 1 + Math.random() * 5.2 : 1;
+        const selfBump = fromId === toId ? 1 + Math.random() * 2.4 : 1;
+        const noise = Math.exp((Math.random() * 2 - 1) * strength);
+        return value * localBump * hotBump * selfBump * noise;
+      });
+      return normalize(weights);
+    }
+
+    function graphFromMatrix(matrix) {
+      return matrix.map((row) => row.map((value, toId) => value > 1e-12 ? toId : -1).filter((toId) => toId >= 0));
+    }
+
+    function reachableSet(matrix, start) {
+      const graph = graphFromMatrix(matrix);
+      const reachable = new Set([start]);
+      const stack = [start];
+      while (stack.length > 0) {
+        const from = stack.pop();
+        for (const to of graph[from]) {
+          if (reachable.has(to)) continue;
+          reachable.add(to);
+          stack.push(to);
+        }
+      }
+      return reachable;
+    }
+
+    function allStatesReachAll(matrix) {
+      return states.every((state) => reachableSet(matrix, state.id).size === states.length);
+    }
+
+    function closedSetIsClosed(matrix, closedSet) {
+      const closed = new Set(closedSet);
+      return closedSet.every((fromId) => matrix[fromId].every((value, toId) => value <= 1e-12 || closed.has(toId)));
+    }
+
+    function averageMaxProbability(matrix) {
+      return matrix.reduce((sum, row) => sum + Math.max(...row), 0) / matrix.length;
+    }
+
+    function kernelIsInteresting(matrix) {
+      const averageMax = averageMaxProbability(matrix);
+      const uniform = 1 / states.length;
+      const rowPeaks = matrix.filter((row) => Math.max(...row) > uniform * 5).length;
+      return averageMax > uniform * 3.8 && rowPeaks >= Math.floor(states.length * 0.45);
+    }
+
+    function buildClosedSets(type) {
+      const center = centerStateId();
+      const ids = shuffle(states.map((state) => state.id).filter((id) => type !== "reducible-branching" || id !== center));
+      const closedSetCount = randomInt(2, Math.min(4, Math.floor(ids.length / 3)));
+      const transientTarget = type === "reducible-branching" ? randomInt(2, 5) : randomInt(0, 7);
+      const transientIds = type === "reducible-branching" ? [center, ...ids.splice(0, transientTarget)] : ids.splice(0, transientTarget);
+      const closedSets = Array.from({ length: closedSetCount }, () => []);
+
+      for (let index = 0; index < closedSetCount; index += 1) {
+        closedSets[index].push(ids.shift());
+      }
+      while (ids.length > 0) {
+        closedSets[Math.floor(Math.random() * closedSets.length)].push(ids.shift());
+      }
+
+      return { closedSets, transientIds: transientIds.filter((id) => id !== undefined) };
+    }
+
+    function reducibleAllowedTargets(type, layout, fromId) {
+      const center = centerStateId();
+      const closedSet = layout.closedSets.find((set) => set.includes(fromId));
+      if (closedSet) return closedSet;
+
+      const allNonCenter = states.map((state) => state.id).filter((id) => type !== "reducible-branching" || id !== center);
+      if (type === "reducible-branching" && fromId === center) return allNonCenter;
+
+      const transientRank = layout.transientIds.indexOf(fromId);
+      const laterTransients = layout.transientIds.slice(Math.max(0, transientRank + 1));
+      const closedTargets = layout.closedSets.flat();
+      const chosenClosedSets = shuffle(layout.closedSets).slice(0, randomInt(1, layout.closedSets.length)).flat();
+      return [...new Set([...laterTransients, ...chosenClosedSets, ...closedTargets.slice(0, randomInt(1, Math.max(1, closedTargets.length)))])];
+    }
+
+    function createReducibleCandidate(type) {
+      const uniform = createUniformKernel();
+      const layout = buildClosedSets(type);
+      const matrix = states.map((state) => {
+        const allowedTargets = reducibleAllowedTargets(type, layout, state.id);
+        return perturbedRowFromUniform(uniform[state.id], state.id, allowedTargets, 2.25);
+      });
+      return { matrix, layout };
+    }
+
+    function reducibleCandidateIsRealized(type, matrix, layout) {
+      const center = centerStateId();
+      const closedSetsAreClosed = layout.closedSets.every((set) => closedSetIsClosed(matrix, set));
+      if (!closedSetsAreClosed || layout.closedSets.length < 2) return false;
+
+      if (type === "reducible-branching") {
+        const initiallyReachable = reachableSet(matrix, center).size === states.length;
+        const closureAfterChoice = layout.closedSets.every((set) => {
+          const reachable = reachableSet(matrix, set[0]);
+          return reachable.size === set.length && set.every((id) => reachable.has(id));
+        });
+        return initiallyReachable && closureAfterChoice && kernelIsInteresting(matrix);
+      }
+
+      const hasMultipleClosedClasses = layout.closedSets.some((set) => set.length > 1);
+      const notIrreducible = !allStatesReachAll(matrix);
+      return hasMultipleClosedClasses && notIrreducible && kernelIsInteresting(matrix);
+    }
+
+    function createIrreducibleCandidate() {
+      const uniform = createUniformKernel();
+      return states.map((state) => perturbedRowFromUniform(uniform[state.id], state.id, states.map((target) => target.id), 2.05));
+    }
+
+    function createKernel(type) {
+      for (let attempt = 1; attempt <= 160; attempt += 1) {
+        if (type === "irreducible") {
+          const matrix = createIrreducibleCandidate();
+          if (allStatesReachAll(matrix) && kernelIsInteresting(matrix)) {
+            kernelMeta = { summary: `irreducible, stochastic attempt ${attempt}` };
+            return matrix;
+          }
+        } else {
+          const candidate = createReducibleCandidate(type);
+          if (reducibleCandidateIsRealized(type, candidate.matrix, candidate.layout)) {
+            kernelMeta = {
+              summary: `${type}, ${candidate.layout.closedSets.length} closed sets, ${candidate.layout.transientIds.length} transient states`
+            };
+            return candidate.matrix;
+          }
+        }
+      }
+
+      kernelMeta = { summary: `${type}, fallback stochastic kernel` };
+      return type === "irreducible" ? createIrreducibleCandidate() : createReducibleCandidate(type).matrix;
+    }
+
+    function effectiveRow(fromId, visitedSet) {
+      const adjusted = baseKernel[fromId].map((value, toId) => {
+        if (toId === fromId) return Math.max(value * 0.38, 0.001);
+        const visitFactor = visitedSet.has(toId) ? 1 - 0.82 * VISIT_MEMORY : 1 + 1.9 * VISIT_MEMORY;
+        return value * visitFactor;
+      });
+      return normalize(adjusted);
+    }
+
+    function chooseFrom(row) {
+      const roll = Math.random();
+      let acc = 0;
+      for (let i = 0; i < row.length; i += 1) {
+        acc += row[i];
+        if (roll <= acc) return i;
+      }
+      return row.length - 1;
+    }
+
+    function adjustedKernelMatrix() {
+      return states.map((state) => effectiveRow(state.id, visited));
+    }
+
+    function statesThatCanReach(target, matrix) {
+      const canReach = states.map((state) => state.id === target);
+      let changed = true;
+      while (changed) {
+        changed = false;
+        for (const state of states) {
+          if (canReach[state.id]) continue;
+          const reachesKnownState = matrix[state.id].some((probability, toId) => probability > 1e-12 && canReach[toId]);
+          if (reachesKnownState) {
+            canReach[state.id] = true;
+            changed = true;
+          }
+        }
+      }
+      return canReach;
+    }
+
+    function solveLinearSystem(matrix, vector, clampToUnit = true) {
+      const n = vector.length;
+      const augmented = matrix.map((row, index) => [...row, vector[index]]);
+
+      for (let column = 0; column < n; column += 1) {
+        let pivot = column;
+        for (let row = column + 1; row < n; row += 1) {
+          if (Math.abs(augmented[row][column]) > Math.abs(augmented[pivot][column])) pivot = row;
+        }
+        if (Math.abs(augmented[pivot][column]) < 1e-12) continue;
+        [augmented[column], augmented[pivot]] = [augmented[pivot], augmented[column]];
+
+        const divisor = augmented[column][column];
+        for (let col = column; col <= n; col += 1) augmented[column][col] /= divisor;
+
+        for (let row = 0; row < n; row += 1) {
+          if (row === column) continue;
+          const factor = augmented[row][column];
+          for (let col = column; col <= n; col += 1) augmented[row][col] -= factor * augmented[column][col];
+        }
+      }
+
+      return augmented.map((row) => clampToUnit ? Math.max(0, Math.min(1, row[n])) : row[n]);
+    }
+
+    function hittingProbabilityFor(target, matrix) {
+      const canReach = statesThatCanReach(target, matrix);
+      if (!canReach[current]) return 0;
+
+      const equations = states.map(() => states.map(() => 0));
+      const constants = states.map(() => 0);
+
+      for (const from of states) {
+        if (from.id === target) {
+          equations[from.id][from.id] = 1;
+          constants[from.id] = 1;
+          continue;
+        }
+        if (!canReach[from.id]) {
+          equations[from.id][from.id] = 1;
+          constants[from.id] = 0;
+          continue;
+        }
+
+        equations[from.id][from.id] = 1;
+        for (const to of states) {
+          equations[from.id][to.id] -= matrix[from.id][to.id];
+        }
+      }
+
+      const probability = solveLinearSystem(equations, constants)[current];
+      if (probability > 1 - 1e-8) return 1;
+      if (probability < 1e-8) return 0;
+      return probability;
+    }
+
+    function computeFutureVisitProbabilities() {
+      if (chainTypeInput.value === "irreducible") return states.map(() => 1);
+      const matrix = adjustedKernelMatrix();
+      return states.map((state) => hittingProbabilityFor(state.id, matrix));
+    }
+
+    function expectedHittingTimeFor(target, matrix) {
+      if (target === current) return 0;
+
+      const equations = states.map(() => states.map(() => 0));
+      const constants = states.map(() => 0);
+
+      for (const from of states) {
+        if (from.id === target) {
+          equations[from.id][from.id] = 1;
+          constants[from.id] = 0;
+          continue;
+        }
+
+        equations[from.id][from.id] = 1;
+        constants[from.id] = 1;
+        for (const to of states) {
+          if (to.id === target) continue;
+          equations[from.id][to.id] -= matrix[from.id][to.id];
+        }
+      }
+
+      return Math.max(0, solveLinearSystem(equations, constants, false)[current]);
+    }
+
+    function computeExpectedHittingTimes() {
+      if (chainTypeInput.value !== "irreducible") return states.map(() => 0);
+      const matrix = adjustedKernelMatrix();
+      return states.map((state) => expectedHittingTimeFor(state.id, matrix));
+    }
+
+    function computeSolidValues() {
+      return chainTypeInput.value === "irreducible" ? expectedHittingTimes : hittingProbabilities;
+    }
+
+    function refreshDistributions() {
+      probabilities = effectiveRow(current, visited);
+      hittingProbabilities = computeFutureVisitProbabilities();
+      expectedHittingTimes = computeExpectedHittingTimes();
+      solidValues = computeSolidValues();
+      updateKernelGrid();
+    }
+
+    function advance() {
+      current = chooseFrom(probabilities);
+      visited.add(current);
+      path.push(current);
+      if (path.length > 42) path.shift();
+      steps += 1;
+      refreshDistributions();
+      updateUi();
+    }
+
+    function reset() {
+      current = centerStateId();
+      steps = 0;
+      visited = new Set([current]);
+      path = [current];
+      refreshDistributions();
+      updateUi();
+    }
+
+    function drawNewKernel() {
+      baseKernel = createKernel(chainTypeInput.value);
+      reset();
+    }
+
+    function probabilityColor(value, values, invert = false) {
+      const minValue = Math.min(...values);
+      const maxValue = Math.max(...values);
+      const span = maxValue - minValue;
+      const rawT = span === 0 ? 1 : Math.max(0, Math.min(1, (value - minValue) / span));
+      const t = invert ? 1 - rawT : rawT;
+      const low = [217, 58, 53];
+      const mid = [240, 201, 75];
+      const high = [52, 208, 109];
+      const left = t < 0.5 ? low : mid;
+      const right = t < 0.5 ? mid : high;
+      const localT = t < 0.5 ? t / 0.5 : (t - 0.5) / 0.5;
+      const rgb = left.map((channel, index) => Math.round(channel + (right[index] - channel) * localT));
+      return `rgb(${rgb[0]}, ${rgb[1]}, ${rgb[2]})`;
+    }
+
+    function expectedHittingRankScores() {
+      const others = states
+        .filter((state) => state.id !== current)
+        .map((state) => ({ id: state.id, time: expectedHittingTimes[state.id] }))
+        .sort((a, b) => a.time - b.time);
+      const scores = states.map(() => 1);
+      const denominator = Math.max(1, others.length - 1);
+      for (let index = 0; index < others.length; index += 1) {
+        scores[others[index].id] = 1 - index / denominator;
+      }
+      return scores;
+    }
+
+    function rotatePoint(point) {
+      const cosY = Math.cos(rotationY);
+      const sinY = Math.sin(rotationY);
+      const cosX = Math.cos(rotationX);
+      const sinX = Math.sin(rotationX);
+      const x1 = point.x * cosY - point.z * sinY;
+      const z1 = point.x * sinY + point.z * cosY;
+      const y1 = point.y * cosX - z1 * sinX;
+      const z2 = point.y * sinX + z1 * cosX;
+      return { x: x1, y: y1, z: z2 };
+    }
+
+    function project(point) {
+      const rotated = rotatePoint(point);
+      const size = Math.min(width, height) * 0.44;
+      const depth = 6.2;
+      const scale = size / (depth - rotated.z);
+      return {
+        x: width / 2 + rotated.x * scale,
+        y: height / 2 + rotated.y * scale,
+        z: rotated.z,
+        scale
+      };
+    }
+
+    function drawPolygon(points) {
+      ctx.beginPath();
+      ctx.moveTo(points[0].x, points[0].y);
+      for (let index = 1; index < points.length; index += 1) ctx.lineTo(points[index].x, points[index].y);
+      ctx.closePath();
+      ctx.fill();
+      ctx.stroke();
+    }
+
+    function cubeVertices(state, inflate = 0) {
+      const half = CUBE_SIZE / 2 + inflate;
+      return [
+        { x: state.x - half, y: state.y - half, z: state.z - half },
+        { x: state.x + half, y: state.y - half, z: state.z - half },
+        { x: state.x + half, y: state.y + half, z: state.z - half },
+        { x: state.x - half, y: state.y + half, z: state.z - half },
+        { x: state.x - half, y: state.y - half, z: state.z + half },
+        { x: state.x + half, y: state.y - half, z: state.z + half },
+        { x: state.x + half, y: state.y + half, z: state.z + half },
+        { x: state.x - half, y: state.y + half, z: state.z + half }
+      ];
+    }
+
+    function cubeFaces(vertices) {
+      const faceIndices = [
+        [0, 1, 2, 3],
+        [4, 5, 6, 7],
+        [0, 1, 5, 4],
+        [2, 3, 7, 6],
+        [1, 2, 6, 5],
+        [0, 3, 7, 4]
+      ];
+      return faceIndices.map((indices) => {
+        const projected = indices.map((index) => project(vertices[index]));
+        return {
+          points: projected,
+          z: projected.reduce((sum, point) => sum + point.z, 0) / projected.length
+        };
+      }).sort((a, b) => a.z - b.z);
+    }
+
+    function drawCubeOutlines() {
+      const min = -GRID_SIZE / 2;
+      const max = GRID_SIZE / 2;
+      const lines = [];
+
+      for (let i = 0; i <= GRID_SIZE; i += 1) {
+        const value = min + i;
+        for (const other of [min, max]) {
+          lines.push([{ x: min, y: value, z: other }, { x: max, y: value, z: other }]);
+          lines.push([{ x: value, y: min, z: other }, { x: value, y: max, z: other }]);
+          lines.push([{ x: min, y: other, z: value }, { x: max, y: other, z: value }]);
+          lines.push([{ x: value, y: other, z: min }, { x: value, y: other, z: max }]);
+          lines.push([{ x: other, y: min, z: value }, { x: other, y: max, z: value }]);
+          lines.push([{ x: other, y: value, z: min }, { x: other, y: value, z: max }]);
+        }
+      }
+
+      ctx.lineWidth = 1;
+      ctx.strokeStyle = "rgba(241, 244, 234, 0.24)";
+      for (const [start, end] of lines) {
+        const ps = project(start);
+        const pe = project(end);
+        ctx.beginPath();
+        ctx.moveTo(ps.x, ps.y);
+        ctx.lineTo(pe.x, pe.y);
+        ctx.stroke();
+      }
+    }
+
+    function drawPath(projected) {
+      if (path.length < 2) return;
+      ctx.lineWidth = 3;
+      ctx.lineCap = "round";
+      ctx.lineJoin = "round";
+      for (let i = 1; i < path.length; i += 1) {
+        const previous = projected.get(path[i - 1]);
+        const next = projected.get(path[i]);
+        const alpha = 0.18 + 0.7 * (i / path.length);
+        ctx.strokeStyle = `rgba(121, 213, 255, ${alpha})`;
+        ctx.beginPath();
+        ctx.moveTo(previous.x, previous.y);
+        ctx.lineTo(next.x, next.y);
+        ctx.stroke();
+      }
+    }
+
+    function drawState(state, projected) {
+      const p = projected.get(state.id);
+      const nextProbability = probabilities[state.id];
+      const solidValue = solidValues[state.id];
+      const isCurrent = state.id === current;
+      const hasVisited = visited.has(state.id);
+      const isExpectedTimeMode = chainTypeInput.value === "irreducible";
+      const showVisitedOutline = hasVisited && !isExpectedTimeMode;
+      const rankScores = isExpectedTimeMode ? expectedHittingRankScores() : null;
+      const color = isExpectedTimeMode ? probabilityColor(rankScores[state.id], [0, 1]) : probabilityColor(solidValue, solidValues);
+      const auraColor = probabilityColor(nextProbability, probabilities);
+      const maxNext = Math.max(...probabilities);
+      const minNext = Math.min(...probabilities);
+      const nextSpan = maxNext - minNext;
+      const nextNormalized = nextSpan === 0 ? 1 : (nextProbability - minNext) / nextSpan;
+      const maxSolid = Math.max(...solidValues);
+      const minSolid = Math.min(...solidValues);
+      const solidSpan = maxSolid - minSolid;
+      const solidNormalized = solidSpan === 0 ? 1 : (solidValue - minSolid) / solidSpan;
+      const sizeNormalized = isExpectedTimeMode ? rankScores[state.id] : solidNormalized;
+      const auraInflate = 0.08 + nextNormalized * 0.18;
+
+      if (representation === "numbered-points" || representation === "plain-points") {
+        const baseRadius = representation === "plain-points" ? 2.2 + sizeNormalized * 2.4 : 5.5 + sizeNormalized * 7;
+        const radius = representation === "plain-points"
+          ? isCurrent ? baseRadius + 3.2 : showVisitedOutline ? baseRadius + 0.8 : baseRadius
+          : isCurrent ? baseRadius + 6 : showVisitedOutline ? baseRadius + 2.5 : baseRadius;
+
+        ctx.beginPath();
+        ctx.fillStyle = auraColor;
+        ctx.globalAlpha = 0.08 + nextNormalized * 0.42;
+        ctx.arc(p.x, p.y, radius * (1.8 + nextNormalized * 1.2), 0, Math.PI * 2);
+        ctx.fill();
+        ctx.globalAlpha = 1;
+
+        ctx.beginPath();
+        ctx.fillStyle = isCurrent ? "#ffffff" : color;
+        ctx.strokeStyle = isCurrent ? "#ffd36a" : showVisitedOutline ? "#fff0bd" : "rgba(255,255,255,0.35)";
+        ctx.lineWidth = representation === "plain-points" ? isCurrent ? 2 : 0.9 : isCurrent ? 2.7 : 1.4;
+        ctx.arc(p.x, p.y, radius, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.stroke();
+
+        if (representation === "numbered-points") {
+          ctx.fillStyle = "#11130f";
+          ctx.font = "700 8px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace";
+          ctx.textAlign = "center";
+          ctx.textBaseline = "middle";
+          ctx.fillText(state.id, p.x, p.y + 0.5);
+        }
+        return;
+      }
+
+      ctx.fillStyle = auraColor;
+      ctx.strokeStyle = auraColor;
+      ctx.lineWidth = isCurrent ? 2.7 : 1.6;
+      ctx.globalAlpha = 0.08 + nextNormalized * 0.26;
+      for (const face of cubeFaces(cubeVertices(state, auraInflate))) drawPolygon(face.points);
+      ctx.globalAlpha = 1;
+
+      ctx.fillStyle = isCurrent ? "#ffffff" : color;
+      ctx.strokeStyle = isCurrent ? "#ffd36a" : showVisitedOutline ? "#fff0bd" : "rgba(255,255,255,0.35)";
+      ctx.lineWidth = isCurrent ? 3 : 1.4;
+      ctx.globalAlpha = 0.22 + sizeNormalized * 0.3;
+      for (const face of cubeFaces(cubeVertices(state))) drawPolygon(face.points);
+      ctx.globalAlpha = 1;
+
+      ctx.fillStyle = "#11130f";
+      ctx.font = "700 8px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace";
+      ctx.textAlign = "center";
+      ctx.textBaseline = "middle";
+      ctx.fillText(state.id, p.x, p.y + 0.5);
+    }
+
+    function drawLabels(projected) {
+      const currentPoint = projected.get(current);
+      ctx.fillStyle = "rgba(255, 255, 255, 0.86)";
+      ctx.font = "700 12px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace";
+      ctx.textAlign = "left";
+      ctx.fillText(`state ${current}`, currentPoint.x + 18, currentPoint.y - 17);
+    }
+
+    function updateKernelGrid() {
+      if (!showKernel) return;
+      const rows = baseKernel.map((row, rowIndex) => rowIndex === current ? probabilities : effectiveRow(rowIndex, visited));
+      const allValues = rows.flat();
+      const cells = [];
+      kernelGrid.style.gridTemplateColumns = `repeat(${states.length}, 1fr)`;
+      for (let rowIndex = 0; rowIndex < rows.length; rowIndex += 1) {
+        for (let columnIndex = 0; columnIndex < rows[rowIndex].length; columnIndex += 1) {
+          const value = rows[rowIndex][columnIndex];
+          const classes = [
+            "kernel-cell",
+            rowIndex === current ? "active-row" : ""
+          ].filter(Boolean).join(" ");
+          cells.push(`<span class="${classes}" title="P(${columnIndex} | ${rowIndex}) = ${value.toFixed(3)}" style="background:${probabilityColor(value, allValues)}">${value.toFixed(2)}</span>`);
+        }
+      }
+      kernelGrid.innerHTML = cells.join("");
+      kernelCaption.textContent = `row ${current} highlighted, ${kernelMeta.summary}`;
+    }
+
+    function updateUi() {
+      stepCount.textContent = String(steps);
+      visitedCount.textContent = String(visited.size);
+      currentState.textContent = String(current);
+      history.textContent = path.map((id, index) => `${String(steps - path.length + index + 1).padStart(3, " ")}  state ${String(id).padStart(2, " ")}`).join("\n");
+      history.scrollTop = history.scrollHeight;
+      representationSelect.value = representation;
+      if (representation === "cubes") {
+        floatingNote.textContent = "Drag to rotate. The state space is a 4 x 4 x 4 block of transparent cubes, each cube one state.";
+      } else if (representation === "numbered-points") {
+        floatingNote.textContent = "Drag to rotate. The state space is a 4 x 4 x 4 lattice of numbered point states.";
+      } else {
+        floatingNote.textContent = "Drag to rotate. The state space is a 4 x 4 x 4 lattice of colored points, with cube outlines for orientation.";
+      }
+      if (chainTypeInput.value === "irreducible") {
+        solidLegend.textContent = "Solid color: expected hitting time (green = shorter, red = longer)";
+        legendText.textContent = "Solid color gives relative expected hitting time: green is shorter, red is longer. The transparent aura gives relative next-step probability. The matrix shows numeric probabilities for the visit-adjusted kernel, with the active row highlighted.";
+      } else {
+        solidLegend.textContent = "Solid color: probability the state will ever be visited";
+        legendText.textContent = "Solid color gives relative ever-visit probability from red to green. The transparent aura gives relative next-step probability. The matrix shows numeric probabilities for the visit-adjusted kernel, with the active row highlighted.";
+      }
+    }
+
+    function render(now = 0) {
+      if (running && now - lastStepAt > Number(speedInput.value)) {
+        advance();
+        lastStepAt = now;
+      }
+
+      if (autoSpin && !dragging) rotationY += 0.0024;
+
+      ctx.clearRect(0, 0, width, height);
+      if (representation === "plain-points") drawCubeOutlines();
+      const projected = new Map(states.map((state) => [state.id, project(state)]));
+      [...states]
+        .sort((a, b) => projected.get(a.id).z - projected.get(b.id).z)
+        .forEach((state) => drawState(state, projected));
+      drawPath(projected);
+      drawLabels(projected);
+      requestAnimationFrame(render);
+    }
+
+    toggleButton.addEventListener("click", () => {
+      running = !running;
+      toggleButton.textContent = running ? "\u23f8" : "\u25b6";
+      lastStepAt = performance.now();
+    });
+
+    stepButton.addEventListener("click", advance);
+
+    resetButton.addEventListener("click", () => {
+      running = false;
+      toggleButton.textContent = "\u25b6";
+      reset();
+    });
+
+    spinButton.addEventListener("click", () => {
+      autoSpin = !autoSpin;
+      spinButton.classList.toggle("primary", autoSpin);
+    });
+
+    kernelToggle.addEventListener("click", () => {
+      showKernel = !showKernel;
+      kernelToggle.classList.toggle("primary", showKernel);
+      kernelPanel.classList.toggle("hidden", !showKernel);
+      updateKernelGrid();
+    });
+
+    representationSelect.addEventListener("change", () => {
+      representation = representationSelect.value;
+      updateUi();
+    });
+
+    newKernelButton.addEventListener("click", drawNewKernel);
+
+    chainTypeInput.addEventListener("change", drawNewKernel);
+
+    canvas.addEventListener("pointerdown", (event) => {
+      dragging = true;
+      lastPointer = { x: event.clientX, y: event.clientY };
+      canvas.setPointerCapture(event.pointerId);
+    });
+
+    canvas.addEventListener("pointermove", (event) => {
+      if (!dragging) return;
+      const dx = event.clientX - lastPointer.x;
+      const dy = event.clientY - lastPointer.y;
+      rotationY += dx * 0.008;
+      rotationX += dy * 0.008;
+      rotationX = Math.max(-1.45, Math.min(1.45, rotationX));
+      lastPointer = { x: event.clientX, y: event.clientY };
+    });
+
+    canvas.addEventListener("pointerup", (event) => {
+      dragging = false;
+      canvas.releasePointerCapture(event.pointerId);
+    });
+
+    window.addEventListener("resize", resize);
+    resize();
+    updateUi();
+    requestAnimationFrame(render);
+  </script>
+</body>
+</html>

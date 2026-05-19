@@ -327,6 +327,26 @@
       right: 22px;
     }
 
+    .view-counter {
+      position: absolute;
+      top: 82px;
+      transform: translateX(-50%);
+      padding: 5px 9px;
+      border: 1px solid rgba(241, 244, 234, 0.12);
+      border-radius: 999px;
+      background: rgba(18, 24, 22, 0.34);
+      color: rgba(241, 244, 234, 0.72);
+      font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+      font-size: 11px;
+      font-weight: 800;
+      pointer-events: none;
+      white-space: nowrap;
+    }
+
+    .view-counter.hidden {
+      display: none;
+    }
+
     .active-banner {
       position: absolute;
       top: 18px;
@@ -457,6 +477,10 @@
       .view-title {
         display: none;
       }
+
+      .view-counter {
+        top: 92px;
+      }
     }
   </style>
 </head>
@@ -471,6 +495,8 @@
     <div class="active-banner" id="activeBanner">state 21</div>
     <div class="view-title full" id="fullTitle">Full space</div>
     <div class="view-title trace" id="traceTitle"></div>
+    <div class="view-counter" id="fullStepCounter">full steps 0</div>
+    <div class="view-counter hidden" id="traceStepCounter">trace activations 0</div>
     <p class="floating-note">Drag to rotate. The state space is a 4 x 4 x 4 block of transparent cubes, each cube one state.</p>
 
     <section class="kernel-panel hidden" id="kernelPanel" aria-label="transition kernel matrix">
@@ -620,6 +646,8 @@
     const traceTitle = document.getElementById("traceTitle");
     const traceArrangement = document.getElementById("traceArrangement");
     const traceColorModeInput = document.getElementById("traceColorMode");
+    const fullStepCounter = document.getElementById("fullStepCounter");
+    const traceStepCounter = document.getElementById("traceStepCounter");
 
     const GRID_SIZE = 4;
     const CUBE_SIZE = 1;
@@ -657,6 +685,7 @@
     let baseKernel = createKernel("irreducible");
     let current = centerStateId();
     let steps = 0;
+    let traceActivations = 0;
     let visited = new Set([current]);
     let path = [current];
     let probabilities = effectiveRow(current, visited);
@@ -1018,6 +1047,7 @@
 
     function advance() {
       current = chooseFrom(probabilities);
+      if (traceStateIds.includes(current)) traceActivations += 1;
       visited.add(current);
       path.push(current);
       if (path.length > 42) path.shift();
@@ -1029,6 +1059,7 @@
     function reset(options = {}) {
       current = centerStateId();
       steps = 0;
+      traceActivations = 0;
       visited = new Set([current]);
       path = [current];
       refreshDistributions({ forceTraceSnapshot: options.forceTraceSnapshot });
@@ -1096,6 +1127,7 @@
       const selected = new Set(traceStateIds);
       for (const input of tracePicker.querySelectorAll("input")) input.checked = selected.has(Number(input.value));
       traceLayout = compactTraceLayout(traceStateIds);
+      traceActivations = 0;
       refreshTraceDistributions(true);
       updateUi();
     }
@@ -1386,6 +1418,11 @@
       visitedCount.textContent = String(visited.size);
       currentState.textContent = String(current);
       activeBanner.textContent = `active state ${current}`;
+      fullStepCounter.textContent = `full steps ${steps}`;
+      fullStepCounter.style.left = traceStateIds.length === 0 ? "50%" : "25%";
+      traceStepCounter.textContent = `trace activations ${traceActivations}`;
+      traceStepCounter.style.left = "75%";
+      traceStepCounter.classList.toggle("hidden", traceStateIds.length === 0);
       history.textContent = path.map((id, index) => `${String(steps - path.length + index + 1).padStart(3, " ")}  state ${String(id).padStart(2, " ")}`).join("\n");
       history.scrollTop = history.scrollHeight;
       traceSummary.textContent = traceStateIds.length === 0

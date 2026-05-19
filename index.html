@@ -38,14 +38,14 @@
     body {
       display: grid;
       grid-template-columns: minmax(0, 1fr) 370px;
-      min-height: 100vh;
+      height: 100vh;
       overflow: hidden;
     }
 
     main {
       position: relative;
       min-width: 0;
-      min-height: 100vh;
+      height: 100vh;
       background:
         radial-gradient(circle at 28% 24%, rgba(121, 213, 255, 0.12), transparent 28%),
         linear-gradient(145deg, #11130f 0%, #161b17 52%, #0d1113 100%);
@@ -67,12 +67,14 @@
       display: flex;
       flex-direction: column;
       gap: 16px;
-      min-height: 100vh;
+      min-height: 0;
+      height: 100vh;
       padding: 22px;
       border-left: 1px solid var(--line);
       background: var(--panel);
       box-shadow: -16px 0 48px rgba(0, 0, 0, 0.22);
       overflow: auto;
+      overscroll-behavior: contain;
     }
 
     h1,
@@ -325,13 +327,29 @@
       right: 22px;
     }
 
+    .active-banner {
+      position: absolute;
+      top: 18px;
+      left: 50%;
+      transform: translateX(-50%);
+      padding: 7px 12px;
+      border: 1px solid rgba(255, 211, 106, 0.28);
+      border-radius: 999px;
+      background: rgba(18, 24, 22, 0.45);
+      color: rgba(255, 244, 211, 0.92);
+      font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+      font-size: 13px;
+      font-weight: 800;
+      pointer-events: none;
+    }
+
     .screen-legend {
       position: absolute;
-      left: 22px;
-      top: 18px;
+      right: 22px;
+      bottom: 18px;
       display: flex;
       gap: 12px;
-      max-width: calc(100% - 44px);
+      max-width: min(520px, calc(100% - 44px));
       padding: 6px 8px;
       border: 1px solid rgba(241, 244, 234, 0.08);
       border-radius: 6px;
@@ -406,11 +424,13 @@
       body {
         grid-template-columns: 1fr;
         grid-template-rows: minmax(460px, 58vh) auto;
+        height: auto;
         overflow: auto;
       }
 
       main,
       aside {
+        height: auto;
         min-height: 0;
       }
 
@@ -429,8 +449,9 @@
       .screen-legend {
         left: 16px;
         right: 16px;
-        top: 14px;
+        bottom: 70px;
         width: auto;
+        max-width: none;
       }
 
       .view-title {
@@ -447,6 +468,7 @@
       <span>Aura: next-step probability</span>
       <span>White: current state</span>
     </div>
+    <div class="active-banner" id="activeBanner">state 21</div>
     <div class="view-title full" id="fullTitle">Full space</div>
     <div class="view-title trace" id="traceTitle"></div>
     <p class="floating-note">Drag to rotate. The state space is a 4 x 4 x 4 block of transparent cubes, each cube one state.</p>
@@ -512,6 +534,20 @@
 
     <section class="trace-tools">
       <h2>Trace</h2>
+      <label>
+        Trace arrangement
+        <select id="traceArrangement">
+          <option value="compact">Compact near-cube</option>
+          <option value="full-space">Full-space positions</option>
+        </select>
+      </label>
+      <label>
+        Trace colors
+        <select id="traceColorMode">
+          <option value="every-step">Update every step</option>
+          <option value="on-trace-active">Update only on trace activation</option>
+        </select>
+      </label>
       <div class="trace-buttons">
         <button id="traceNone" type="button">None</button>
         <button id="traceAll" type="button">All</button>
@@ -574,6 +610,7 @@
     const legendText = document.getElementById("legendText");
     const floatingNote = document.querySelector(".floating-note");
     const solidLegend = document.getElementById("solidLegend");
+    const activeBanner = document.getElementById("activeBanner");
     const tracePicker = document.getElementById("tracePicker");
     const traceSummary = document.getElementById("traceSummary");
     const traceNone = document.getElementById("traceNone");
@@ -581,6 +618,8 @@
     const traceEven = document.getElementById("traceEven");
     const traceRandom = document.getElementById("traceRandom");
     const traceTitle = document.getElementById("traceTitle");
+    const traceArrangement = document.getElementById("traceArrangement");
+    const traceColorModeInput = document.getElementById("traceColorMode");
 
     const GRID_SIZE = 4;
     const CUBE_SIZE = 1;
@@ -626,6 +665,12 @@
     let solidValues = computeSolidValues();
     let traceStateIds = [];
     let traceLayout = new Map();
+    let traceArrangementMode = "compact";
+    let traceColorMode = "every-step";
+    let traceProbabilities = [...probabilities];
+    let traceSolidValues = [...solidValues];
+    let traceExpectedHittingTimes = [...expectedHittingTimes];
+    let traceReferenceState = current;
 
     function centerStateId() {
       return states.reduce((best, state) => {
@@ -954,11 +999,20 @@
       return chainTypeInput.value === "irreducible" ? expectedHittingTimes : hittingProbabilities;
     }
 
-    function refreshDistributions() {
+    function refreshTraceDistributions(force = false) {
+      if (!force && !traceStateIds.includes(current)) return;
+      traceProbabilities = [...probabilities];
+      traceSolidValues = [...solidValues];
+      traceExpectedHittingTimes = [...expectedHittingTimes];
+      traceReferenceState = current;
+    }
+
+    function refreshDistributions(options = {}) {
       probabilities = effectiveRow(current, visited);
       hittingProbabilities = computeFutureVisitProbabilities();
       expectedHittingTimes = computeExpectedHittingTimes();
       solidValues = computeSolidValues();
+      refreshTraceDistributions(options.forceTraceSnapshot);
       updateKernelGrid();
     }
 
@@ -972,18 +1026,18 @@
       updateUi();
     }
 
-    function reset() {
+    function reset(options = {}) {
       current = centerStateId();
       steps = 0;
       visited = new Set([current]);
       path = [current];
-      refreshDistributions();
+      refreshDistributions({ forceTraceSnapshot: options.forceTraceSnapshot });
       updateUi();
     }
 
     function drawNewKernel() {
       baseKernel = createKernel(chainTypeInput.value);
-      reset();
+      reset({ forceTraceSnapshot: true });
     }
 
     function probabilityColor(value, values, invert = false) {
@@ -1002,10 +1056,11 @@
       return `rgb(${rgb[0]}, ${rgb[1]}, ${rgb[2]})`;
     }
 
-    function expectedHittingRankScores() {
+    function expectedHittingRankScoresFor(referenceState, times, domainIds = states.map((state) => state.id)) {
+      const domain = new Set(domainIds);
       const others = states
-        .filter((state) => state.id !== current)
-        .map((state) => ({ id: state.id, time: expectedHittingTimes[state.id] }))
+        .filter((state) => domain.has(state.id) && state.id !== referenceState)
+        .map((state) => ({ id: state.id, time: times[state.id] }))
         .sort((a, b) => a.time - b.time);
       const scores = states.map(() => 1);
       const denominator = Math.max(1, others.length - 1);
@@ -1041,6 +1096,7 @@
       const selected = new Set(traceStateIds);
       for (const input of tracePicker.querySelectorAll("input")) input.checked = selected.has(Number(input.value));
       traceLayout = compactTraceLayout(traceStateIds);
+      refreshTraceDistributions(true);
       updateUi();
     }
 
@@ -1048,9 +1104,7 @@
       const layout = new Map();
       const count = ids.length;
       if (count === 0) return layout;
-      const xCount = Math.ceil(Math.cbrt(count));
-      const yCount = Math.ceil(Math.sqrt(count / xCount));
-      const zCount = Math.ceil(count / (xCount * yCount));
+      const { x: xCount, y: yCount, z: zCount } = compactTraceDimensions(count);
 
       ids.forEach((id, index) => {
         const xIndex = index % xCount;
@@ -1067,6 +1121,26 @@
         });
       });
       return layout;
+    }
+
+    function compactTraceDimensions(count) {
+      const cubeRoot = Math.round(Math.cbrt(count));
+      if (cubeRoot ** 3 === count) return { x: cubeRoot, y: cubeRoot, z: cubeRoot };
+
+      let best = null;
+      for (let x = 1; x <= count; x += 1) {
+        for (let y = 1; y <= count; y += 1) {
+          const z = Math.ceil(count / (x * y));
+          const dimensions = [x, y, z].sort((a, b) => b - a);
+          const volume = dimensions[0] * dimensions[1] * dimensions[2];
+          const spread = dimensions[0] - dimensions[2];
+          const surface = dimensions[0] * dimensions[1] + dimensions[0] * dimensions[2] + dimensions[1] * dimensions[2];
+          const score = volume - count + spread * 0.2 + surface * 0.001;
+          if (!best || score < best.score) best = { dimensions, score };
+        }
+      }
+
+      return { x: best.dimensions[0], y: best.dimensions[1], z: best.dimensions[2] };
     }
 
     function project(point, view) {
@@ -1186,21 +1260,28 @@
 
     function drawState(state, projected, options = {}) {
       const p = projected.get(state.id);
-      const nextProbability = probabilities[state.id];
-      const solidValue = solidValues[state.id];
+      const viewProbabilities = options.probabilities || probabilities;
+      const viewSolidValues = options.solidValues || solidValues;
+      const viewExpectedHittingTimes = options.expectedHittingTimes || expectedHittingTimes;
+      const referenceState = options.referenceState ?? current;
+      const colorDomainIds = options.colorDomainIds || states.map((domainState) => domainState.id);
+      const domainProbabilities = colorDomainIds.map((id) => viewProbabilities[id]);
+      const domainSolidValues = colorDomainIds.map((id) => viewSolidValues[id]);
+      const nextProbability = viewProbabilities[state.id];
+      const solidValue = viewSolidValues[state.id];
       const isCurrent = options.allowActive !== false && state.id === current;
       const hasVisited = visited.has(state.id);
       const isExpectedTimeMode = chainTypeInput.value === "irreducible";
       const showVisitedOutline = hasVisited && !isExpectedTimeMode;
-      const rankScores = isExpectedTimeMode ? expectedHittingRankScores() : null;
-      const color = isExpectedTimeMode ? probabilityColor(rankScores[state.id], [0, 1]) : probabilityColor(solidValue, solidValues);
-      const auraColor = probabilityColor(nextProbability, probabilities);
-      const maxNext = Math.max(...probabilities);
-      const minNext = Math.min(...probabilities);
+      const rankScores = isExpectedTimeMode ? expectedHittingRankScoresFor(referenceState, viewExpectedHittingTimes, colorDomainIds) : null;
+      const color = isExpectedTimeMode ? probabilityColor(rankScores[state.id], [0, 1]) : probabilityColor(solidValue, domainSolidValues);
+      const auraColor = probabilityColor(nextProbability, domainProbabilities);
+      const maxNext = Math.max(...domainProbabilities);
+      const minNext = Math.min(...domainProbabilities);
       const nextSpan = maxNext - minNext;
       const nextNormalized = nextSpan === 0 ? 1 : (nextProbability - minNext) / nextSpan;
-      const maxSolid = Math.max(...solidValues);
-      const minSolid = Math.min(...solidValues);
+      const maxSolid = Math.max(...domainSolidValues);
+      const minSolid = Math.min(...domainSolidValues);
       const solidSpan = maxSolid - minSolid;
       const solidNormalized = solidSpan === 0 ? 1 : (solidValue - minSolid) / solidSpan;
       const sizeNormalized = isExpectedTimeMode ? rankScores[state.id] : solidNormalized;
@@ -1258,17 +1339,8 @@
       ctx.fillText(state.id, p.x, p.y + 0.5);
     }
 
-    function drawLabels(projected, allowActive = true) {
-      if (!allowActive) return;
-      const currentPoint = projected.get(current);
-      if (!currentPoint) return;
-      ctx.fillStyle = "rgba(255, 255, 255, 0.86)";
-      ctx.font = "700 12px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace";
-      ctx.textAlign = "left";
-      ctx.fillText(`state ${current}`, currentPoint.x + 18, currentPoint.y - 17);
-    }
-
     function traceDimensions() {
+      if (traceArrangementMode === "full-space") return { x: GRID_SIZE, y: GRID_SIZE, z: GRID_SIZE };
       if (traceLayout.size === 0) return { x: GRID_SIZE, y: GRID_SIZE, z: GRID_SIZE };
       const first = traceLayout.values().next().value;
       return { x: first.traceXCount, y: first.traceYCount, z: first.traceZCount };
@@ -1281,12 +1353,12 @@
 
     function drawStateSet(statesToDraw, view, options = {}) {
       if (representation === "plain-points") drawCubeOutlines(view, options.dimensions);
+      const colorDomainIds = statesToDraw.map((state) => state.id);
       const projected = new Map(statesToDraw.map((state) => [state.id, project(state, view)]));
       [...statesToDraw]
         .sort((a, b) => projected.get(a.id).z - projected.get(b.id).z)
-        .forEach((state) => drawState(state, projected, { ...options, view }));
+        .forEach((state) => drawState(state, projected, { ...options, view, colorDomainIds }));
       drawPath(projected, options.path || path);
-      drawLabels(projected, options.allowActive !== false);
     }
 
     function updateKernelGrid() {
@@ -1313,13 +1385,20 @@
       stepCount.textContent = String(steps);
       visitedCount.textContent = String(visited.size);
       currentState.textContent = String(current);
+      activeBanner.textContent = `active state ${current}`;
       history.textContent = path.map((id, index) => `${String(steps - path.length + index + 1).padStart(3, " ")}  state ${String(id).padStart(2, " ")}`).join("\n");
       history.scrollTop = history.scrollHeight;
       traceSummary.textContent = traceStateIds.length === 0
         ? "No trace selected."
         : `Trace contains ${traceStateIds.length} states. Active ${traceStateIds.includes(current) ? "inside" : "outside"} trace.`;
-      traceTitle.textContent = traceStateIds.length === 0 ? "" : `Trace (${traceStateIds.length})`;
+      traceTitle.textContent = traceStateIds.length === 0
+        ? ""
+        : traceArrangementMode === "full-space"
+          ? `Trace in full space (${traceStateIds.length})`
+          : `Trace compacted (${traceStateIds.length})`;
       representationSelect.value = representation;
+      traceArrangement.value = traceArrangementMode;
+      traceColorModeInput.value = traceColorMode;
       if (representation === "cubes") {
         floatingNote.textContent = "Drag to rotate. The state space is a 4 x 4 x 4 block of transparent cubes, each cube one state.";
       } else if (representation === "numbered-points") {
@@ -1361,11 +1440,23 @@
         ctx.stroke();
         ctx.restore();
 
-        const traceStates = traceStateIds.map((id) => traceLayout.get(id));
-        const traceView = { x: width / 2 + gap / 2, y: 0, width: width / 2 - gap / 2, height, scale: 0.48 };
+        const traceStates = traceArrangementMode === "full-space"
+          ? traceStateIds.map((id) => states[id])
+          : traceStateIds.map((id) => traceLayout.get(id));
+        const traceView = {
+          x: width / 2 + gap / 2,
+          y: 0,
+          width: width / 2 - gap / 2,
+          height,
+          scale: traceArrangementMode === "full-space" ? 0.4 : 0.48
+        };
         drawStateSet(traceStates, traceView, {
           dimensions: traceDimensions(),
           allowActive: traceStateIds.includes(current),
+          probabilities: traceColorMode === "every-step" ? probabilities : traceProbabilities,
+          solidValues: traceColorMode === "every-step" ? solidValues : traceSolidValues,
+          expectedHittingTimes: traceColorMode === "every-step" ? expectedHittingTimes : traceExpectedHittingTimes,
+          referenceState: traceColorMode === "every-step" ? current : traceReferenceState,
           path: visibleTracePath()
         });
       }
@@ -1400,6 +1491,16 @@
 
     representationSelect.addEventListener("change", () => {
       representation = representationSelect.value;
+      updateUi();
+    });
+
+    traceArrangement.addEventListener("change", () => {
+      traceArrangementMode = traceArrangement.value;
+      updateUi();
+    });
+
+    traceColorModeInput.addEventListener("change", () => {
+      traceColorMode = traceColorModeInput.value;
       updateUi();
     });
 

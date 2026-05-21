@@ -689,7 +689,7 @@
       </div>
       <div class="probability-bar" aria-hidden="true"></div>
       <div class="scale-labels" aria-hidden="true"><span>min</span><span>mid</span><span>max</span></div>
-      <p class="subtle" id="legendText">Solid color gives relative expected hitting time: green is shorter, red is longer. The transparent aura gives relative next-step probability. The matrix shows numeric probabilities for the base kernel, with the active row highlighted.</p>
+      <p class="subtle" id="legendText">Solid color gives relative expected hitting time: green is shorter and red is longer or unreachable. The transparent aura gives relative next-step probability. The matrix shows numeric probabilities for the base kernel, with the active row highlighted.</p>
     </section>
 
     <section class="path-section" id="pathSection">
@@ -747,6 +747,8 @@
     const MIN_STATE_COUNT = 8;
     const MAX_STATE_COUNT = 125;
     const CUBE_SIZE = 1;
+    const CUBE_GAP = 0.28;
+    const CUBE_STEP = CUBE_SIZE + CUBE_GAP;
     const VISIT_MEMORY = 0.64;
     let fullDimensions = { x: 4, y: 4, z: 4 };
     let states = buildStateSpace(DEFAULT_STATE_COUNT);
@@ -801,9 +803,9 @@
               label: record?.label ?? `S${nextStates.length}`,
               editorX: record?.editorX,
               editorY: record?.editorY,
-              x: xIndex - (fullDimensions.x - 1) / 2,
-              y: yIndex - (fullDimensions.y - 1) / 2,
-              z: zIndex - (fullDimensions.z - 1) / 2,
+              x: (xIndex - (fullDimensions.x - 1) / 2) * CUBE_STEP,
+              y: (yIndex - (fullDimensions.y - 1) / 2) * CUBE_STEP,
+              z: (zIndex - (fullDimensions.z - 1) / 2) * CUBE_STEP,
               xIndex,
               yIndex,
               zIndex
@@ -1163,43 +1165,40 @@
     }
 
     function computeFutureVisitProbabilities() {
-      if (expectedTimeModeActive()) return states.map(() => 1);
       const matrix = adjustedKernelMatrix();
       return states.map((state) => hittingProbabilityFor(state.id, matrix));
     }
 
     function expectedHittingTimeFor(target, matrix) {
       if (target === current) return 0;
+      if (hittingProbabilityFor(target, matrix) < 1 - 1e-8) return Infinity;
 
-      const equations = states.map(() => states.map(() => 0));
-      const constants = states.map(() => 0);
+      const canReach = statesThatCanReach(target, matrix);
+      const unknownIds = states
+        .map((state) => state.id)
+        .filter((id) => id !== target && canReach[id]);
+      const unknownIndex = new Map(unknownIds.map((id, index) => [id, index]));
+      const equations = unknownIds.map(() => unknownIds.map(() => 0));
+      const constants = unknownIds.map(() => 1);
 
-      for (const from of states) {
-        if (from.id === target) {
-          equations[from.id][from.id] = 1;
-          constants[from.id] = 0;
-          continue;
-        }
-
-        equations[from.id][from.id] = 1;
-        constants[from.id] = 1;
-        for (const to of states) {
-          if (to.id === target) continue;
-          equations[from.id][to.id] -= matrix[from.id][to.id];
+      for (const fromId of unknownIds) {
+        const rowIndex = unknownIndex.get(fromId);
+        equations[rowIndex][rowIndex] = 1;
+        for (const toId of unknownIds) {
+          equations[rowIndex][unknownIndex.get(toId)] -= matrix[fromId][toId];
         }
       }
 
-      return Math.max(0, solveLinearSystem(equations, constants, false)[current]);
+      return Math.max(0, solveLinearSystem(equations, constants, false)[unknownIndex.get(current)]);
     }
 
     function computeExpectedHittingTimes() {
-      if (!expectedTimeModeActive()) return states.map(() => 0);
       const matrix = adjustedKernelMatrix();
       return states.map((state) => expectedHittingTimeFor(state.id, matrix));
     }
 
     function computeSolidValues() {
-      return expectedTimeModeActive() ? expectedHittingTimes : hittingProbabilities;
+      return expectedHittingTimes;
     }
 
     function matrixReachableSet(matrix, start) {
@@ -1267,22 +1266,18 @@
 
     function expectedHittingTimeInMatrix(start, target, matrix) {
       if (start === target) return 0;
-      const equations = matrix.map(() => matrix.map(() => 0));
-      const constants = matrix.map(() => 0);
-      for (let from = 0; from < matrix.length; from += 1) {
-        if (from === target) {
-          equations[from][from] = 1;
-          constants[from] = 0;
-          continue;
-        }
-        equations[from][from] = 1;
-        constants[from] = 1;
-        for (let to = 0; to < matrix.length; to += 1) {
-          if (to === target) continue;
-          equations[from][to] -= matrix[from][to];
-        }
+      if (hittingProbabilityInMatrix(start, target, matrix) < 1 - 1e-8) return Infinity;
+      const canReach = matrixStatesThatCanReach(target, matrix);
+      const unknownIds = matrix.map((_, index) => index).filter((id) => id !== target && canReach[id]);
+      const unknownIndex = new Map(unknownIds.map((id, index) => [id, index]));
+      const equations = unknownIds.map(() => unknownIds.map(() => 0));
+      const constants = unknownIds.map(() => 1);
+      for (const fromId of unknownIds) {
+        const rowIndex = unknownIndex.get(fromId);
+        equations[rowIndex][rowIndex] = 1;
+        for (const toId of unknownIds) equations[rowIndex][unknownIndex.get(toId)] -= matrix[fromId][toId];
       }
-      return Math.max(0, solveLinearSystem(equations, constants, false)[start]);
+      return Math.max(0, solveLinearSystem(equations, constants, false)[unknownIndex.get(start)]);
     }
 
     function refreshTraceDistributions() {
@@ -1304,18 +1299,12 @@
         traceProbabilities[traceStateIds[index]] = value;
       });
 
-      traceExpectedTimeMode = matrixIsIrreducible(rows);
-      if (traceExpectedTimeMode) {
-        traceStateIds.forEach((id, index) => {
-          const value = expectedHittingTimeInMatrix(activeTraceIndex, index, rows);
-          traceExpectedHittingTimes[id] = value;
-          traceSolidValues[id] = value;
-        });
-      } else {
-        traceStateIds.forEach((id, index) => {
-          traceSolidValues[id] = hittingProbabilityInMatrix(activeTraceIndex, index, rows);
-        });
-      }
+      traceExpectedTimeMode = true;
+      traceStateIds.forEach((id, index) => {
+        const value = expectedHittingTimeInMatrix(activeTraceIndex, index, rows);
+        traceExpectedHittingTimes[id] = value;
+        traceSolidValues[id] = value;
+      });
     }
 
     function refreshDistributions(options = {}) {
@@ -1596,10 +1585,13 @@
         .map((state) => ({ id: state.id, time: times[state.id] }))
         .sort((a, b) => a.time - b.time);
       const scores = states.map(() => 1);
-      const denominator = Math.max(1, others.length - 1);
-      for (let index = 0; index < others.length; index += 1) {
-        scores[others[index].id] = 1 - index / denominator;
+      const finite = others.filter((item) => Number.isFinite(item.time));
+      const infinite = others.filter((item) => !Number.isFinite(item.time));
+      const denominator = Math.max(1, finite.length - (infinite.length > 0 ? 0 : 1));
+      for (let index = 0; index < finite.length; index += 1) {
+        scores[finite[index].id] = Math.max(0, 1 - index / denominator);
       }
+      for (const item of infinite) scores[item.id] = 0;
       return scores;
     }
 
@@ -1648,9 +1640,9 @@
         const zIndex = Math.floor(index / (xCount * yCount));
         layout.set(id, {
           ...states[id],
-          x: xIndex - (xCount - 1) / 2,
-          y: yIndex - (yCount - 1) / 2,
-          z: zIndex - (zCount - 1) / 2,
+          x: (xIndex - (xCount - 1) / 2) * CUBE_STEP,
+          y: (yIndex - (yCount - 1) / 2) * CUBE_STEP,
+          z: (zIndex - (zCount - 1) / 2) * CUBE_STEP,
           traceXCount: xCount,
           traceYCount: yCount,
           traceZCount: zCount
@@ -1734,30 +1726,30 @@
     }
 
     function drawCubeOutlines(view, dimensions = fullDimensions) {
-      const minX = -dimensions.x / 2;
-      const maxX = dimensions.x / 2;
-      const minY = -dimensions.y / 2;
-      const maxY = dimensions.y / 2;
-      const minZ = -dimensions.z / 2;
-      const maxZ = dimensions.z / 2;
+      const minX = -((dimensions.x - 1) * CUBE_STEP + CUBE_SIZE) / 2;
+      const maxX = ((dimensions.x - 1) * CUBE_STEP + CUBE_SIZE) / 2;
+      const minY = -((dimensions.y - 1) * CUBE_STEP + CUBE_SIZE) / 2;
+      const maxY = ((dimensions.y - 1) * CUBE_STEP + CUBE_SIZE) / 2;
+      const minZ = -((dimensions.z - 1) * CUBE_STEP + CUBE_SIZE) / 2;
+      const maxZ = ((dimensions.z - 1) * CUBE_STEP + CUBE_SIZE) / 2;
       const lines = [];
 
       for (let i = 0; i <= dimensions.x; i += 1) {
-        const x = minX + i;
+        const x = i === dimensions.x ? maxX : minX + i * CUBE_STEP;
         lines.push([{ x, y: minY, z: minZ }, { x, y: maxY, z: minZ }]);
         lines.push([{ x, y: minY, z: maxZ }, { x, y: maxY, z: maxZ }]);
         lines.push([{ x, y: minY, z: minZ }, { x, y: minY, z: maxZ }]);
         lines.push([{ x, y: maxY, z: minZ }, { x, y: maxY, z: maxZ }]);
       }
       for (let i = 0; i <= dimensions.y; i += 1) {
-        const y = minY + i;
+        const y = i === dimensions.y ? maxY : minY + i * CUBE_STEP;
         lines.push([{ x: minX, y, z: minZ }, { x: maxX, y, z: minZ }]);
         lines.push([{ x: minX, y, z: maxZ }, { x: maxX, y, z: maxZ }]);
         lines.push([{ x: minX, y, z: minZ }, { x: minX, y, z: maxZ }]);
         lines.push([{ x: maxX, y, z: minZ }, { x: maxX, y, z: maxZ }]);
       }
       for (let i = 0; i <= dimensions.z; i += 1) {
-        const z = minZ + i;
+        const z = i === dimensions.z ? maxZ : minZ + i * CUBE_STEP;
         lines.push([{ x: minX, y: minY, z }, { x: maxX, y: minY, z }]);
         lines.push([{ x: minX, y: maxY, z }, { x: maxX, y: maxY, z }]);
         lines.push([{ x: minX, y: minY, z }, { x: minX, y: maxY, z }]);
@@ -1809,7 +1801,7 @@
       const activeState = options.activeState ?? current;
       const isCurrent = options.allowActive !== false && state.id === activeState;
       const hasVisited = visited.has(state.id);
-      const isExpectedTimeMode = options.expectedTimeMode ?? expectedTimeModeActive();
+      const isExpectedTimeMode = true;
       const showVisitedOutline = hasVisited && !isExpectedTimeMode;
       const rankScores = isExpectedTimeMode ? expectedHittingRankScoresFor(referenceState, viewExpectedHittingTimes, colorDomainIds) : null;
       const color = isExpectedTimeMode ? probabilityColor(rankScores[state.id], [0, 1]) : probabilityColor(solidValue, domainSolidValues);
@@ -1823,7 +1815,7 @@
       const solidSpan = maxSolid - minSolid;
       const solidNormalized = solidSpan === 0 ? 1 : (solidValue - minSolid) / solidSpan;
       const sizeNormalized = isExpectedTimeMode ? rankScores[state.id] : solidNormalized;
-      const auraInflate = 0.08 + nextNormalized * 0.18;
+      const auraInflate = 0.035 + nextNormalized * 0.1;
 
       if (representation === "numbered-points" || representation === "plain-points") {
         const baseRadius = representation === "plain-points" ? 2.2 + sizeNormalized * 2.4 : 5.5 + sizeNormalized * 7;
@@ -2058,13 +2050,8 @@
       } else {
         floatingNote.textContent = `Drag to rotate. The state space is a ${fullDimensions.x} x ${fullDimensions.y} x ${fullDimensions.z} lattice containing ${states.length} colored points, with cube outlines for orientation.`;
       }
-      if (expectedTimeModeActive()) {
-        solidLegend.textContent = "Solid color: expected hitting time (green = shorter, red = longer)";
-        legendText.textContent = "Solid color gives relative expected hitting time: green is shorter, red is longer. The transparent aura gives relative next-step probability. The matrix shows numeric probabilities for the base kernel, with the active row highlighted.";
-      } else {
-        solidLegend.textContent = "Solid color: probability the state will ever be visited";
-        legendText.textContent = "Solid color gives relative ever-visit probability from red to green. The transparent aura gives relative next-step probability. The matrix shows numeric probabilities for the base kernel, with the active row highlighted.";
-      }
+      solidLegend.textContent = "Solid color: expected hitting time (green = shorter, red = longer)";
+      legendText.textContent = "Solid color gives relative expected hitting time: green is shorter and red is longer or unreachable. The transparent aura gives relative next-step probability. The matrix shows numeric probabilities for the base kernel, with the active row highlighted.";
     }
 
     function render(now = 0) {

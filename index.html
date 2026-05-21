@@ -658,13 +658,6 @@
           <option value="full-space">Full-space positions</option>
         </select>
       </label>
-      <label>
-        Trace colors
-        <select id="traceColorMode">
-          <option value="every-step">Update every step</option>
-          <option value="on-trace-active">Update only on trace activation</option>
-        </select>
-      </label>
       <div class="trace-buttons">
         <button id="traceNone" type="button">None</button>
         <button id="traceAll" type="button">All</button>
@@ -747,7 +740,6 @@
     const traceRandom = document.getElementById("traceRandom");
     const traceTitle = document.getElementById("traceTitle");
     const traceArrangement = document.getElementById("traceArrangement");
-    const traceColorModeInput = document.getElementById("traceColorMode");
     const fullStepCounter = document.getElementById("fullStepCounter");
     const traceStepCounter = document.getElementById("traceStepCounter");
 
@@ -788,11 +780,11 @@
     let traceStateIds = [];
     let traceLayout = new Map();
     let traceArrangementMode = "compact";
-    let traceColorMode = "every-step";
     let traceProbabilities = [...probabilities];
     let traceSolidValues = [...solidValues];
     let traceExpectedHittingTimes = [...expectedHittingTimes];
-    let traceReferenceState = current;
+    let traceActiveState = null;
+    let traceExpectedTimeMode = false;
     let selectedStartState = current;
 
     function buildStateSpace(count, records = null) {
@@ -1210,12 +1202,120 @@
       return expectedTimeModeActive() ? expectedHittingTimes : hittingProbabilities;
     }
 
-    function refreshTraceDistributions(force = false) {
-      if (!force && !traceStateIds.includes(current)) return;
-      traceProbabilities = [...probabilities];
-      traceSolidValues = [...solidValues];
-      traceExpectedHittingTimes = [...expectedHittingTimes];
-      traceReferenceState = current;
+    function matrixReachableSet(matrix, start) {
+      const reachable = new Set([start]);
+      const stack = [start];
+      while (stack.length > 0) {
+        const from = stack.pop();
+        for (let to = 0; to < matrix.length; to += 1) {
+          if (matrix[from][to] <= 1e-12 || reachable.has(to)) continue;
+          reachable.add(to);
+          stack.push(to);
+        }
+      }
+      return reachable;
+    }
+
+    function matrixIsIrreducible(matrix) {
+      return matrix.length > 0 && matrix.every((_, index) => matrixReachableSet(matrix, index).size === matrix.length);
+    }
+
+    function matrixStatesThatCanReach(target, matrix) {
+      const canReach = matrix.map((_, index) => index === target);
+      let changed = true;
+      while (changed) {
+        changed = false;
+        for (let from = 0; from < matrix.length; from += 1) {
+          if (canReach[from]) continue;
+          const reachesKnownState = matrix[from].some((probability, to) => probability > 1e-12 && canReach[to]);
+          if (reachesKnownState) {
+            canReach[from] = true;
+            changed = true;
+          }
+        }
+      }
+      return canReach;
+    }
+
+    function hittingProbabilityInMatrix(start, target, matrix) {
+      if (start === target) return 1;
+      const canReach = matrixStatesThatCanReach(target, matrix);
+      if (!canReach[start]) return 0;
+
+      const equations = matrix.map(() => matrix.map(() => 0));
+      const constants = matrix.map(() => 0);
+      for (let from = 0; from < matrix.length; from += 1) {
+        if (from === target) {
+          equations[from][from] = 1;
+          constants[from] = 1;
+          continue;
+        }
+        if (!canReach[from]) {
+          equations[from][from] = 1;
+          constants[from] = 0;
+          continue;
+        }
+        equations[from][from] = 1;
+        for (let to = 0; to < matrix.length; to += 1) equations[from][to] -= matrix[from][to];
+      }
+
+      const probability = solveLinearSystem(equations, constants)[start];
+      if (probability > 1 - 1e-8) return 1;
+      if (probability < 1e-8) return 0;
+      return probability;
+    }
+
+    function expectedHittingTimeInMatrix(start, target, matrix) {
+      if (start === target) return 0;
+      const equations = matrix.map(() => matrix.map(() => 0));
+      const constants = matrix.map(() => 0);
+      for (let from = 0; from < matrix.length; from += 1) {
+        if (from === target) {
+          equations[from][from] = 1;
+          constants[from] = 0;
+          continue;
+        }
+        equations[from][from] = 1;
+        constants[from] = 1;
+        for (let to = 0; to < matrix.length; to += 1) {
+          if (to === target) continue;
+          equations[from][to] -= matrix[from][to];
+        }
+      }
+      return Math.max(0, solveLinearSystem(equations, constants, false)[start]);
+    }
+
+    function refreshTraceDistributions() {
+      traceProbabilities = states.map(() => 0);
+      traceSolidValues = states.map(() => 0);
+      traceExpectedHittingTimes = states.map(() => 0);
+      if (traceStateIds.length === 0) {
+        traceActiveState = null;
+        traceExpectedTimeMode = false;
+        return;
+      }
+
+      if (traceStateIds.includes(current)) traceActiveState = current;
+      if (!traceStateIds.includes(traceActiveState)) traceActiveState = latestTraceStateFromPath() ?? traceStateIds[0];
+
+      const rows = traceKernelRows();
+      const activeTraceIndex = traceStateIds.indexOf(traceActiveState);
+      rows[activeTraceIndex].forEach((value, index) => {
+        traceProbabilities[traceStateIds[index]] = value;
+      });
+
+      traceExpectedTimeMode = matrixIsIrreducible(rows);
+      if (traceExpectedTimeMode) {
+        traceStateIds.forEach((id, index) => {
+          const value = expectedHittingTimeInMatrix(activeTraceIndex, index, rows);
+          traceExpectedHittingTimes[id] = value;
+          traceSolidValues[id] = value;
+        });
+      } else {
+        traceStateIds.forEach((id, index) => {
+          traceSolidValues[id] = hittingProbabilityInMatrix(activeTraceIndex, index, rows);
+        });
+      }
     }
 
     function refreshDistributions(options = {}) {
@@ -1223,7 +1323,7 @@
       hittingProbabilities = computeFutureVisitProbabilities();
       expectedHittingTimes = computeExpectedHittingTimes();
       solidValues = computeSolidValues();
-      refreshTraceDistributions(options.forceTraceSnapshot);
+      refreshTraceDistributions();
       updateKernelGrid();
     }
 
@@ -1284,6 +1384,7 @@
       states = buildStateSpace(nextCount);
       traceStateIds = [];
       traceLayout = new Map();
+      traceActiveState = null;
       selectedStartState = defaultStartStateId();
       buildStartStatePicker();
       buildTracePicker();
@@ -1418,6 +1519,7 @@
       stateCountInput.value = String(states.length);
       traceStateIds = [];
       traceLayout = new Map();
+      traceActiveState = null;
       selectedStartState = defaultStartStateId();
       buildStartStatePicker();
       buildTracePicker();
@@ -1528,7 +1630,8 @@
       for (const input of tracePicker.querySelectorAll("input")) input.checked = selected.has(Number(input.value));
       traceLayout = compactTraceLayout(traceStateIds);
       traceActivations = 0;
-      refreshTraceDistributions(true);
+      traceActiveState = traceStateIds.includes(current) ? current : latestTraceStateFromPath() ?? traceStateIds[0] ?? null;
+      refreshTraceDistributions();
       updateKernelGrid();
       updateUi();
     }
@@ -1703,9 +1806,10 @@
       const domainSolidValues = colorDomainIds.map((id) => viewSolidValues[id]);
       const nextProbability = viewProbabilities[state.id];
       const solidValue = viewSolidValues[state.id];
-      const isCurrent = options.allowActive !== false && state.id === current;
+      const activeState = options.activeState ?? current;
+      const isCurrent = options.allowActive !== false && state.id === activeState;
       const hasVisited = visited.has(state.id);
-      const isExpectedTimeMode = expectedTimeModeActive();
+      const isExpectedTimeMode = options.expectedTimeMode ?? expectedTimeModeActive();
       const showVisitedOutline = hasVisited && !isExpectedTimeMode;
       const rankScores = isExpectedTimeMode ? expectedHittingRankScoresFor(referenceState, viewExpectedHittingTimes, colorDomainIds) : null;
       const color = isExpectedTimeMode ? probabilityColor(rankScores[state.id], [0, 1]) : probabilityColor(solidValue, domainSolidValues);
@@ -1785,6 +1889,11 @@
       return path.filter((id) => traceSet.has(id));
     }
 
+    function latestTraceStateFromPath() {
+      const visible = visibleTracePath();
+      return visible.length > 0 ? visible[visible.length - 1] : null;
+    }
+
     function drawStateSet(statesToDraw, view, options = {}) {
       if (representation === "plain-points") drawCubeOutlines(view, options.dimensions);
       const colorDomainIds = statesToDraw.map((state) => state.id);
@@ -1795,13 +1904,84 @@
       drawPath(projected, options.path || path);
     }
 
+    function hiddenStatesThatCanReachVisible(sourceKernel, hiddenIds, visibleSet) {
+      const returnCapable = new Set();
+      let changed = true;
+      while (changed) {
+        changed = false;
+        for (const hiddenId of hiddenIds) {
+          if (returnCapable.has(hiddenId)) continue;
+          const reachesVisibleOrCapableHidden = sourceKernel[hiddenId].some((probability, toId) => (
+            probability > 1e-12 && (visibleSet.has(toId) || returnCapable.has(toId))
+          ));
+          if (reachesVisibleOrCapableHidden) {
+            returnCapable.add(hiddenId);
+            changed = true;
+          }
+        }
+      }
+      return returnCapable;
+    }
+
+    function solveTraceHittingColumn(sourceKernel, hiddenIds, visibleIds, targetVisibleId, returnCapableHiddenSet) {
+      const returnCapableHidden = hiddenIds.filter((id) => returnCapableHiddenSet.has(id));
+      const hiddenIndex = new Map(returnCapableHidden.map((id, index) => [id, index]));
+      const hitting = new Map(hiddenIds.map((id) => [id, 0]));
+      if (returnCapableHidden.length === 0) return hitting;
+
+      const equations = returnCapableHidden.map(() => returnCapableHidden.map(() => 0));
+      const constants = returnCapableHidden.map(() => 0);
+
+      for (const hiddenId of returnCapableHidden) {
+        const rowIndex = hiddenIndex.get(hiddenId);
+        equations[rowIndex][rowIndex] = 1;
+        constants[rowIndex] = sourceKernel[hiddenId][targetVisibleId] || 0;
+        for (const nextHiddenId of returnCapableHidden) {
+          const columnIndex = hiddenIndex.get(nextHiddenId);
+          equations[rowIndex][columnIndex] -= sourceKernel[hiddenId][nextHiddenId] || 0;
+        }
+      }
+
+      const solved = solveLinearSystem(equations, constants);
+      returnCapableHidden.forEach((hiddenId, index) => hitting.set(hiddenId, solved[index]));
+      return hitting;
+    }
+
+    function clampTraceKernelValue(value) {
+      if (value < 0 && value > -1e-10) return 0;
+      if (value > 1 && value < 1 + 1e-10) return 1;
+      return value;
+    }
+
+    function computeTraceKernel(sourceKernel, visibleIds) {
+      const visible = [...visibleIds];
+      if (visible.length === 0) return [];
+
+      const visibleSet = new Set(visible);
+      const hidden = states.map((state) => state.id).filter((id) => !visibleSet.has(id));
+      if (hidden.length === 0) return visible.map((fromId) => visible.map((toId) => sourceKernel[fromId][toId] || 0));
+
+      const returnCapableHiddenSet = hiddenStatesThatCanReachVisible(sourceKernel, hidden, visibleSet);
+      const hittingByTarget = new Map();
+      for (const targetVisibleId of visible) {
+        hittingByTarget.set(
+          targetVisibleId,
+          solveTraceHittingColumn(sourceKernel, hidden, visible, targetVisibleId, returnCapableHiddenSet)
+        );
+      }
+
+      return visible.map((fromId) => visible.map((toId) => {
+        let value = sourceKernel[fromId][toId] || 0;
+        const hiddenHitting = hittingByTarget.get(toId);
+        for (const hiddenId of hidden) {
+          value += (sourceKernel[fromId][hiddenId] || 0) * (hiddenHitting.get(hiddenId) || 0);
+        }
+        return clampTraceKernelValue(value);
+      }));
+    }
+
     function traceKernelRows() {
-      return traceStateIds.map((fromId) => {
-        const rowValues = traceStateIds.map((toId) => baseKernel[fromId][toId]);
-        const total = rowValues.reduce((sum, value) => sum + value, 0);
-        if (total <= 1e-14) return rowValues.map(() => 0);
-        return rowValues.map((value) => value / total);
-      });
+      return computeTraceKernel(adjustedKernelMatrix(), traceStateIds);
     }
 
     function renderKernelMatrix(grid, rows, rowIds, columnIds, activeRowId) {
@@ -1834,14 +2014,14 @@
           traceKernelRows(),
           traceStateIds,
           traceStateIds,
-          traceStateIds.includes(current) ? current : -1
+          traceActiveState ?? -1
         );
       } else {
         traceKernelGrid.innerHTML = "";
       }
 
       kernelCaption.textContent = hasTrace
-        ? `full row ${stateLabel(current)} highlighted; trace row highlighted when active state is in trace`
+        ? `full row ${stateLabel(current)} highlighted; trace row ${stateLabel(traceActiveState)} highlighted`
         : `row ${stateLabel(current)} highlighted, ${kernelMeta.summary}`;
     }
 
@@ -1862,7 +2042,7 @@
       history.scrollTop = history.scrollHeight;
       traceSummary.textContent = traceStateIds.length === 0
         ? "No trace selected."
-        : `Trace contains ${traceStateIds.length} states. Active ${stateLabel(current)} is ${traceStateIds.includes(current) ? "inside" : "outside"} trace.`;
+        : `Trace contains ${traceStateIds.length} states. Trace active state is ${stateLabel(traceActiveState)}.`;
       traceTitle.textContent = traceStateIds.length === 0
         ? ""
         : traceArrangementMode === "full-space"
@@ -1870,7 +2050,6 @@
           : `Trace compacted (${traceStateIds.length})`;
       representationSelect.value = representation;
       traceArrangement.value = traceArrangementMode;
-      traceColorModeInput.value = traceColorMode;
       updateMovementLabel();
       if (representation === "cubes") {
         floatingNote.textContent = `Drag to rotate. The state space is a ${fullDimensions.x} x ${fullDimensions.y} x ${fullDimensions.z} block containing ${states.length} transparent cube states.`;
@@ -1925,11 +2104,12 @@
         };
         drawStateSet(traceStates, traceView, {
           dimensions: traceDimensions(),
-          allowActive: traceStateIds.includes(current),
-          probabilities: traceColorMode === "every-step" ? probabilities : traceProbabilities,
-          solidValues: traceColorMode === "every-step" ? solidValues : traceSolidValues,
-          expectedHittingTimes: traceColorMode === "every-step" ? expectedHittingTimes : traceExpectedHittingTimes,
-          referenceState: traceColorMode === "every-step" ? current : traceReferenceState,
+          activeState: traceActiveState,
+          probabilities: traceProbabilities,
+          solidValues: traceSolidValues,
+          expectedHittingTimes: traceExpectedHittingTimes,
+          referenceState: traceActiveState,
+          expectedTimeMode: traceExpectedTimeMode,
           path: visibleTracePath()
         });
       }
@@ -1980,11 +2160,6 @@
 
     traceArrangement.addEventListener("change", () => {
       traceArrangementMode = traceArrangement.value;
-      updateUi();
-    });
-
-    traceColorModeInput.addEventListener("change", () => {
-      traceColorMode = traceColorModeInput.value;
       updateUi();
     });
 

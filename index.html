@@ -251,12 +251,10 @@
       display: none;
     }
 
-    .trace-tools {
-      display: grid;
-      gap: 8px;
-    }
-
-    .import-tools {
+    .chain-tools,
+    .view-tools,
+    .trace-tools,
+    .playback-tools {
       display: grid;
       gap: 8px;
     }
@@ -584,28 +582,6 @@
       <button class="primary" id="pathToggle" title="Toggle path history">P</button>
     </div>
 
-    <label>
-      Representation
-      <select id="representationSelect">
-        <option value="cubes">Transparent cubes</option>
-        <option value="numbered-points">Numbered points</option>
-        <option value="plain-points">Plain points</option>
-      </select>
-    </label>
-
-    <div class="option-grid">
-      <label>
-        Full states
-        <input id="stateCount" type="number" min="8" max="125" step="1" value="64">
-      </label>
-      <button id="applyStateCount">Apply</button>
-    </div>
-
-    <label>
-      Start state
-      <select id="startState"></select>
-    </label>
-
     <div class="metric-grid">
       <div class="metric">
         <span>Step</span>
@@ -621,32 +597,16 @@
       </div>
     </div>
 
-    <div class="option-grid">
+    <section class="view-tools">
+      <h2>View</h2>
       <label>
-        Chain type
-        <select id="chainType">
-          <option value="irreducible">Irreducible</option>
-          <option value="reducible">Reducible split</option>
-          <option value="reducible-branching">Reducible, branching start</option>
-          <option value="cycle-ordered">n-cycle, ordered</option>
-          <option value="cycle-random">n-cycle, random</option>
+        Representation
+        <select id="representationSelect">
+          <option value="cubes">Transparent cubes</option>
+          <option value="numbered-points">Numbered points</option>
+          <option value="plain-points">Plain points</option>
         </select>
       </label>
-      <button id="newKernel">New kernel</button>
-    </div>
-
-    <label>
-      Between-state movement <span id="movementValue">70%</span>
-      <input id="movement" type="range" min="0" max="100" value="70">
-    </label>
-
-    <section class="import-tools">
-      <h2>Import</h2>
-      <label>
-        Markov maker JSON or CSV
-        <input id="importFile" type="file" accept=".json,.csv,application/json,text/csv,text/plain">
-      </label>
-      <p class="subtle" id="importStatus">No imported matrix.</p>
     </section>
 
     <section class="trace-tools">
@@ -668,10 +628,51 @@
       <p class="subtle" id="traceSummary">No trace selected.</p>
     </section>
 
-    <label>
-      Speed
-      <input id="speed" type="range" min="160" max="1400" value="680">
-    </label>
+    <section class="playback-tools">
+      <h2>Playback</h2>
+      <label>
+        Step speed <span id="speedValue">680 ms</span>
+        <input id="speed" type="range" min="0" max="100" value="55">
+      </label>
+    </section>
+
+    <section class="chain-tools">
+      <h2>Chain</h2>
+      <div class="option-grid">
+        <label>
+          Full states
+          <input id="stateCount" type="number" min="8" max="125" step="1" value="64">
+        </label>
+        <button id="applyStateCount">Apply</button>
+      </div>
+      <label>
+        Start state
+        <select id="startState"></select>
+      </label>
+      <div class="option-grid">
+        <label>
+          Generated chain type
+          <select id="chainType">
+            <option value="irreducible">Irreducible</option>
+            <option value="reducible">Reducible split</option>
+            <option value="reducible-branching">Reducible, branching start</option>
+            <option value="cycle-ordered">n-cycle, ordered</option>
+            <option value="cycle-random">n-cycle, random</option>
+          </select>
+        </label>
+        <button id="newKernel">New kernel</button>
+      </div>
+      <label>
+        Generated between-state movement <span id="movementValue">70%</span>
+        <input id="movement" type="range" min="0" max="100" value="70">
+      </label>
+      <p class="subtle">For generated stochastic kernels: higher values make transitions spread more broadly between states and reduce self-loop dominance.</p>
+      <label>
+        Import Markov maker JSON or CSV
+        <input id="importFile" type="file" accept=".json,.csv,application/json,text/csv,text/plain">
+      </label>
+      <p class="subtle" id="importStatus">No imported matrix.</p>
+    </section>
 
     <section class="legend" aria-label="legend">
       <h2>Encoding</h2>
@@ -713,6 +714,7 @@
     const startStateInput = document.getElementById("startState");
     const newKernelButton = document.getElementById("newKernel");
     const speedInput = document.getElementById("speed");
+    const speedValue = document.getElementById("speedValue");
     const movementInput = document.getElementById("movement");
     const movementValue = document.getElementById("movementValue");
     const importFileInput = document.getElementById("importFile");
@@ -1346,6 +1348,17 @@
 
     function updateMovementLabel() {
       movementValue.textContent = `${movementInput.value}%`;
+    }
+
+    function stepIntervalMs() {
+      const speed = Math.max(0, Math.min(100, Number(speedInput.value)));
+      const slowFactor = (100 - speed) / 100;
+      return Math.round(45 + slowFactor * slowFactor * 2150);
+    }
+
+    function updateSpeedLabel() {
+      const interval = stepIntervalMs();
+      speedValue.textContent = interval < 1000 ? `${interval} ms` : `${(interval / 1000).toFixed(1)} s`;
     }
 
     function defaultStartStateId() {
@@ -2043,6 +2056,7 @@
       representationSelect.value = representation;
       traceArrangement.value = traceArrangementMode;
       updateMovementLabel();
+      updateSpeedLabel();
       if (representation === "cubes") {
         floatingNote.textContent = `Drag to rotate. The state space is a ${fullDimensions.x} x ${fullDimensions.y} x ${fullDimensions.z} block containing ${states.length} transparent cube states.`;
       } else if (representation === "numbered-points") {
@@ -2055,7 +2069,7 @@
     }
 
     function render(now = 0) {
-      if (running && now - lastStepAt > Number(speedInput.value)) {
+      if (running && now - lastStepAt > stepIntervalMs()) {
         advance();
         lastStepAt = now;
       }
@@ -2181,6 +2195,8 @@
     movementInput.addEventListener("input", updateMovementLabel);
 
     movementInput.addEventListener("change", drawNewKernel);
+
+    speedInput.addEventListener("input", updateSpeedLabel);
 
     importFileInput.addEventListener("change", () => importMatrixFile(importFileInput.files[0]));
 
